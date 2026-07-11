@@ -1,0 +1,6 @@
+
+> moles-backend@1.0.0 dev
+> tsx watch src/index.ts
+
+◇ injected env (0) from .env // tip: ◈ encrypted .env [www.dotenvx.com]
+Moles backend running on http://localhost:4000

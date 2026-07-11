@@ -1,0 +1,63 @@
+{
+  "wallets": {
+    "local-dev-w1d2lc0u1c": {
+      "playerId": "local-dev-w1d2lc0u1c",
+      "accountId": "local-dev-w1d2lc0u1c",
+      "lightningAddress": null,
+      "balance": 0,
+      "lastKnownSpeedBalanceSats": null,
+      "createdAt": "2026-07-09T05:45:54.553Z",
+      "updatedAt": "2026-07-09T05:47:13.817Z",
+      "holdSats": 0,
+      "pendingWithdrawal": null
+    },
+    "local-dev-txjdrp17kj": {
+      "playerId": "local-dev-txjdrp17kj",
+      "accountId": "local-dev-txjdrp17kj",
+      "lightningAddress": null,
+      "balance": 0,
+      "lastKnownSpeedBalanceSats": null,
+      "createdAt": "2026-07-09T05:54:31.362Z",
+      "updatedAt": "2026-07-09T06:18:00.542Z",
+      "holdSats": 0,
+      "pendingWithdrawal": null
+    },
+    "local-dev-1dfvh71lyn": {
+      "playerId": "local-dev-1dfvh71lyn",
+      "accountId": "local-dev-1dfvh71lyn",
+      "lightningAddress": null,
+      "balance": 0,
+      "lastKnownSpeedBalanceSats": null,
+      "createdAt": "2026-07-09T06:00:28.413Z",
+      "updatedAt": "2026-07-09T08:49:50.442Z",
+      "holdSats": 0,
+      "pendingWithdrawal": null
+    },
+    "local-dev-jti5gd694n": {
+      "playerId": "local-dev-jti5gd694n",
+      "accountId": "local-dev-jti5gd694n",
+      "lightningAddress": null,
+      "balance": 0,
+      "lastKnownSpeedBalanceSats": null,
+      "createdAt": "2026-07-09T06:22:17.348Z",
+      "updatedAt": "2026-07-09T06:29:15.440Z",
+      "holdSats": 0,
+      "pendingWithdrawal": null
+    },
+    "local-dev-0uumv73i1s": {
+      "playerId": "local-dev-0uumv73i1s",
+      "accountId": "local-dev-0uumv73i1s",
+      "lightningAddress": null,
+      "balance": 0,
+      "holdSats": 0,
+      "pendingWithdrawal": null,
+      "lastKnownSpeedBalanceSats": null,
+      "createdAt": "2026-07-09T07:46:08.917Z",
+      "updatedAt": "2026-07-09T08:03:08.089Z"
+    }
+  },
+  "rounds": {},
+  "history": [],
+  "transactions": [],
+  "processedInvoices": {}
+}

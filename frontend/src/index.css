@@ -1,0 +1,71 @@
+:root {
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, 'Apple Color Emoji', 'Segoe UI Emoji';
+  color: #0f172a;
+  background: #f3f5fb;
+  --bg: #f3f5fb;
+  --card: #ffffff;
+  --card2: #f8fafc;
+  --text: #0f172a;
+  --muted: #64748b;
+  --border: rgba(15, 23, 42, 0.12);
+  --shadow: 0 16px 42px rgba(15, 23, 42, 0.1);
+  --shadow2: 0 8px 24px rgba(15, 23, 42, 0.08);
+  --primary: #16a34a;
+  --primary2: #22c55e;
+  --vh: 1vh;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+#root {
+  height: 100%;
+}
+
+body {
+  height: calc(var(--vh, 1vh) * 100);
+  height: 100dvh;
+  min-height: calc(var(--vh, 1vh) * 100);
+  min-height: 100dvh;
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  color: inherit;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+input,
+select,
+button {
+  font-family: inherit;
+}
+
+input[type='number'] {
+  appearance: textfield;
+}
+
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button {
+  appearance: none;
+  margin: 0;
+}
