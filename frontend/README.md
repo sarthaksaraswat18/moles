@@ -55,6 +55,39 @@ npm run dev
 
 The backend must also be running for balances, deposits, rounds, and withdrawals to work.
 
+## Vercel deploy
+
+Deploy this frontend as a separate Vercel project.
+
+### Vercel settings
+
+- Root Directory: `frontend`
+- Framework Preset: `Vite`
+- Install Command: `npm install`
+- Build Command: `npm run build`
+- Output Directory: `dist`
+
+The included `vercel.json` handles the build settings and adds an SPA rewrite so route refreshes still load `index.html`.
+
+### Vercel environment variables
+
+Set these in the Vercel project:
+
+```env
+VITE_API_BASE_URL=https://your-render-backend.onrender.com
+VITE_LOCK_LN_ADDRESS=1
+```
+
+### Render update
+
+After Vercel gives you the live frontend URL, update the backend environment on Render:
+
+```env
+FRONTEND_ORIGIN=https://your-app.vercel.app
+```
+
+This must match the deployed frontend host exactly or the backend CORS check will block requests.
+
 ## Production note
 
 This is still an MVP for real-money play. Before going live, add production-grade authentication, webhook verification, durable database storage, rate limiting, and anti-abuse controls.

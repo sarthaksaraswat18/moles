@@ -16,8 +16,7 @@ const HOLE_COUNT = 7
 const MAX_ROUNDS = 6
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000'
 const DEFAULT_BET = 20
-const DEFAULT_DEPOSIT = 1000
-const TOP_UP_OPTIONS = [1000, 5000, 10000]
+const TOP_UP_OPTIONS = [5, 1000, 5000, 10000]
 const DEFAULT_MOLES = 3
 const LOCAL_DEV_ACCOUNT_STORAGE_KEY = 'moles-speed-local-account'
 const MULTIPLIER_TABLE: Record<number, number[]> = {
@@ -73,6 +72,8 @@ type WalletBootstrapContext = {
   balanceUsdt: number | null
   source: WalletSource
 }
+
+type BootstrapParamKey = 'acct' | 'accountId' | 'p_add' | 'lightningAddress' | 'lang' | 'bal_btc' | 'bal_usdt'
 
 type PlayerWallet = {
   playerId: string
@@ -259,19 +260,35 @@ function getStoredLocalAccountId(): string {
   return generated
 }
 
+function getBootstrapParam(...keys: BootstrapParamKey[]): string | null {
+  const hash = String(window.location.hash || '')
+  const hashBody = hash.startsWith('#') ? hash.slice(1) : hash
+  const sources = [new URLSearchParams(hashBody), new URLSearchParams(window.location.search || '')]
+
+  for (const params of sources) {
+    for (const key of keys) {
+      const value = params.get(key)
+      if (value !== null) {
+        return value
+      }
+    }
+  }
+
+  return null
+}
+
 function parseBootstrapContext(): WalletBootstrapContext {
-  const params = new URLSearchParams(window.location.search)
-  const accountId = getOptionalString(params.get('acct') ?? params.get('accountId'))
+  const accountId = getOptionalString(getBootstrapParam('acct', 'accountId'))
   const lightningAddress =
     getOptionalString(readLightningAddressFromLocation()) ??
-    getOptionalString(params.get('p_add') ?? params.get('lightningAddress'))
+    getOptionalString(getBootstrapParam('p_add', 'lightningAddress'))
 
   return {
     accountId: accountId ?? getStoredLocalAccountId(),
     lightningAddress,
-    language: getOptionalString(params.get('lang')),
-    balanceBtc: getOptionalNumber(params.get('bal_btc')),
-    balanceUsdt: getOptionalNumber(params.get('bal_usdt')),
+    language: getOptionalString(getBootstrapParam('lang')),
+    balanceBtc: getOptionalNumber(getBootstrapParam('bal_btc')),
+    balanceUsdt: getOptionalNumber(getBootstrapParam('bal_usdt')),
     source: accountId ? 'speed-wallet' : 'local-dev',
   }
 }
@@ -550,7 +567,6 @@ function App() {
   const [controlMode, setControlMode] = useState<ControlMode>('manual')
   const [betAmount, setBetAmount] = useState(DEFAULT_BET)
   const [moleCount, setMoleCount] = useState(DEFAULT_MOLES)
-  const [depositAmount, setDepositAmount] = useState(DEFAULT_DEPOSIT)
   const [withdrawAmount, setWithdrawAmount] = useState('')
   const [lightningAddress, setLightningAddress] = useState(() => {
     const fromBootstrap = bootstrapContext.lightningAddress ?? ''
@@ -614,7 +630,7 @@ function App() {
     activeGame?.stage === 'cashed-out' ||
     activeGame?.stage === 'won-all'
   const connectedLightningAddress =
-    wallet?.lightningAddress ?? getOptionalString(lightningAddress) ?? bootstrapContext.lightningAddress
+    getOptionalString(lightningAddress) ?? wallet?.lightningAddress ?? bootstrapContext.lightningAddress
   const displayLightningAddress = formatDisplayLightningAddress(connectedLightningAddress ?? '')
 
   const paymentUrl = useMemo(() => {
@@ -836,6 +852,16 @@ function App() {
   }, [lightningAddress])
 
   useEffect(() => {
+    if (lightningAddress.trim()) {
+      return
+    }
+
+    if (wallet?.lightningAddress) {
+      setLightningAddress(wallet.lightningAddress)
+    }
+  }, [lightningAddress, wallet?.lightningAddress])
+
+  useEffect(() => {
     if (!showPaymentModal || !paymentInfo?.invoiceId || paymentVerified) {
       return
     }
@@ -918,7 +944,7 @@ function App() {
       setFlashMessage(
         bootstrapContext.source === 'speed-wallet'
           ? 'Speed Wallet session connected. Deposits, gameplay, and withdrawals now run through the backend ledger.'
-          : 'Local dev account loaded. Add your Speed Wallet account in the URL to test the live embedded flow.',
+          : 'Standalone session loaded. Open this inside Speed Wallet to connect the embedded wallet flow.',
       )
     }
 
@@ -1069,8 +1095,7 @@ function App() {
     setFlashMessage('Board reset. Adjust your bet settings and place another backend-backed round.')
   }
 
-  async function requestDeposit(amountOverride?: number) {
-    const amount = amountOverride ?? depositAmount
+  async function requestDeposit(amount: number) {
     if (amount <= 0) {
       setFlashMessage('Deposit amount must be greater than 0.')
       return
@@ -1308,10 +1333,10 @@ function App() {
               : displayLightningAddress.trim() || 'Set lightning address in Add Cash'}
           </div>
         </div>
-        <div className={`conn ${bootstrapContext.source === 'speed-wallet' ? 'ok' : 'bad'}`}>
+        <div className={`conn ${bootstrapContext.source === 'speed-wallet' ? 'ok' : 'neutral'}`}>
           {bootstrapContext.source === 'speed-wallet'
             ? `Connected (${shortenMiddle(bootstrapContext.accountId, 3)})`
-            : 'Local dev'}
+            : 'Standalone'}
         </div>
       </header>
 
@@ -1601,7 +1626,6 @@ function App() {
                   type="button"
                   className="button"
                   onClick={() => {
-                    setDepositAmount(amount)
                     setShowAddCashModal(false)
                     void requestDeposit(amount)
                   }}
@@ -1612,32 +1636,7 @@ function App() {
               ))}
             </div>
 
-            <div className="field">
-              <div className="fieldLabel">Custom amount (SATS)</div>
-              <input
-                className="input"
-                type="number"
-                min="1"
-                step="1"
-                inputMode="numeric"
-                value={depositAmount}
-                onChange={(event) => setDepositAmount(Math.max(0, Number(event.target.value)))}
-                disabled={isDepositing}
-              />
-            </div>
-
             <div className="actions">
-              <button
-                type="button"
-                className="button"
-                onClick={() => {
-                  setShowAddCashModal(false)
-                  void requestDeposit()
-                }}
-                disabled={isDepositing || depositAmount <= 0}
-              >
-                {isDepositing ? 'Creating invoice…' : `Deposit ${formatSats(depositAmount)} SATS`}
-              </button>
               <button
                 type="button"
                 className="button secondary"
@@ -1648,26 +1647,20 @@ function App() {
               </button>
             </div>
 
-            {!lightningAddressLocked && !connectedLightningAddress ? (
-              <div className="field">
-                <div className="fieldLabel">Lightning Address</div>
-                <input
-                  className="input"
-                  type="text"
-                  value={lightningAddress}
-                  onChange={(event) => setLightningAddress(event.target.value)}
-                  placeholder="example@speed.app"
-                  disabled={isWithdrawing}
-                />
-              </div>
-            ) : lightningAddressLocked ? (
-              <div className="field">
-                <div className="fieldLabel">Speed Lightning Address</div>
-                <div className="lockedField">
-                  {displayLightningAddress.trim() || 'Fetching Speed lightning address...'}
-                </div>
-              </div>
-            ) : null}
+            <div className="field">
+              <div className="fieldLabel">Lightning Address</div>
+              <input
+                className="input"
+                type="text"
+                value={lightningAddress}
+                onChange={(event) => setLightningAddress(event.target.value)}
+                placeholder="example@speed.app"
+                disabled={isWithdrawing}
+              />
+              {displayLightningAddress.trim() ? (
+                <div className="muted">Detected: {displayLightningAddress}</div>
+              ) : null}
+            </div>
           </div>
         </div>
       ) : null}

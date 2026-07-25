@@ -72,6 +72,12 @@
   border-color: rgba(239, 68, 68, 0.24);
 }
 
+.conn.neutral {
+  color: #1d4ed8;
+  background: rgba(59, 130, 246, 0.1);
+  border-color: rgba(59, 130, 246, 0.22);
+}
+
 .layout {
   display: grid;
   grid-template-columns: 300px 1fr;
