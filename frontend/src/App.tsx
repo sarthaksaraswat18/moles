@@ -1560,9 +1560,29 @@ function App() {
 
             {paymentUrl || paymentInfo.lightningInvoice ? (
               <div className="qrGrid">
+                {paymentUrl ? (
+                  <div className="qrCard">
+                    <div className="qrTitle">Scan in Speed</div>
+                    <div className="muted paymentHint">On desktop, scan this QR with your phone to open the Speed payment page.</div>
+                    <div className="qrWrap">
+                      <QRCodeSVG value={paymentUrl} size={220} includeMargin />
+                    </div>
+                    <div className="copyRow">
+                      <button
+                        type="button"
+                        className="button secondary"
+                        onClick={() => void copyTextToClipboard(paymentUrl, 'Payment link copied to your clipboard.')}
+                      >
+                        Copy payment link
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+
                 {paymentInfo.lightningInvoice ? (
                   <div className="qrCard">
                     <div className="qrTitle">Lightning Invoice (BOLT11)</div>
+                    <div className="muted paymentHint">If your wallet supports Lightning invoice scanning, you can scan this directly.</div>
                     <div className="qrWrap">
                       <QRCodeSVG value={paymentInfo.lightningInvoice} size={220} includeMargin />
                     </div>
