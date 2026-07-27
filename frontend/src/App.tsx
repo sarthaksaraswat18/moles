@@ -138,8 +138,16 @@ type SpeedPromptPayload = {
 type SpeedPaymentObject = {
   id: string
   status?: string
+  amount?: number
   payment_request?: string
+  lightning_invoice?: string
+  hosted_invoice_url?: string
   expires_at?: number
+  payment_method_options?: {
+    lightning?: {
+      payment_request?: string
+    }
+  }
 }
 
 type PaymentInfo = {
@@ -234,6 +242,55 @@ function getOptionalString(value: unknown): string | null {
   }
 
   return value.trim()
+}
+
+function getOptionalObject(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' ? (value as Record<string, unknown>) : null
+}
+
+function extractLightningInvoiceFromSpeedPayment(payment: SpeedPaymentObject | null | undefined): string | null {
+  const paymentRecord = getOptionalObject(payment)
+  const paymentMethodOptions = getOptionalObject(paymentRecord?.payment_method_options)
+  const lightningOptions = getOptionalObject(paymentMethodOptions?.lightning)
+
+  const candidates = [
+    lightningOptions?.payment_request,
+    paymentRecord?.lightning_invoice,
+    paymentRecord?.payment_request,
+  ]
+
+  for (const candidate of candidates) {
+    const value = getOptionalString(candidate)
+    if (value && value.toLowerCase().startsWith('ln')) {
+      return value
+    }
+  }
+
+  return null
+}
+
+function extractHostedInvoiceUrlFromSpeedPayment(payment: SpeedPaymentObject | null | undefined): string | null {
+  const paymentRecord = getOptionalObject(payment)
+  return getOptionalString(paymentRecord?.hosted_invoice_url)
+}
+
+function normalizePaymentInfo(response: DepositResponse, amountSats: number): PaymentInfo {
+  const fallbackInvoice =
+    response.speedPrompt?.data.deposit_address ??
+    extractLightningInvoiceFromSpeedPayment(response.speedPayment)
+
+  const fallbackHostedInvoiceUrl = extractHostedInvoiceUrlFromSpeedPayment(response.speedPayment)
+  const paymentInfo = response.paymentInfo
+
+  return {
+    invoiceId: paymentInfo?.invoiceId ?? response.speedPayment.id,
+    amountSats: paymentInfo?.amountSats ?? response.speedPayment.amount ?? amountSats,
+    lightningInvoice: paymentInfo?.lightningInvoice ?? fallbackInvoice ?? null,
+    hostedInvoiceUrl: paymentInfo?.hostedInvoiceUrl ?? fallbackHostedInvoiceUrl ?? null,
+    speedInterfaceUrl: paymentInfo?.speedInterfaceUrl ?? paymentInfo?.hostedInvoiceUrl ?? fallbackHostedInvoiceUrl ?? null,
+    expiresAt: paymentInfo?.expiresAt ?? response.speedPayment.expires_at ?? null,
+    purpose: paymentInfo?.purpose ?? 'topup',
+  }
 }
 
 function getOptionalNumber(value: unknown): number | null {
@@ -1126,15 +1183,7 @@ function App() {
       const dispatched = sendSpeedWalletPrompt(response.speedPrompt)
       setWallet(response.wallet)
 
-      const nextPaymentInfo: PaymentInfo = response.paymentInfo ?? {
-        invoiceId: response.speedPayment.id,
-        amountSats: amount,
-        lightningInvoice: response.speedPayment.payment_request ?? null,
-        hostedInvoiceUrl: null,
-        speedInterfaceUrl: null,
-        expiresAt: response.speedPayment.expires_at ?? null,
-        purpose: 'topup',
-      }
+      const nextPaymentInfo = normalizePaymentInfo(response, amount)
 
       setPaymentInfo(nextPaymentInfo)
       setShowPaymentModal(true)
