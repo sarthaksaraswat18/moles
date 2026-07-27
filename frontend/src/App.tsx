@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
-import { QRCodeSVG } from 'qrcode.react'
+import QRCode from 'qrcode'
 import './App.css'
 import {
   formatDisplayLightningAddress,
@@ -218,6 +218,12 @@ type ErrorResponse = {
   error?: string
 }
 
+type QrCodeImageProps = {
+  value: string
+  size?: number
+  alt: string
+}
+
 type SpeedBridgeWindow = Window & typeof globalThis & {
   ReactNativeWebView?: {
     postMessage: (message: string) => void
@@ -304,6 +310,64 @@ function getOptionalNumber(value: unknown): number | null {
   }
 
   return null
+}
+
+function QrCodeImage({ value, size = 220, alt }: QrCodeImageProps) {
+  const [src, setSrc] = useState<string>('')
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    let active = true
+
+    if (!value) {
+      setSrc('')
+      setFailed(false)
+      return () => {
+        active = false
+      }
+    }
+
+    setSrc('')
+    setFailed(false)
+
+    void QRCode.toDataURL(value, {
+      width: size,
+      margin: 2,
+      errorCorrectionLevel: 'M',
+      color: {
+        dark: '#111827',
+        light: '#ffffff',
+      },
+    })
+      .then((nextSrc: string) => {
+        if (!active) {
+          return
+        }
+
+        setSrc(nextSrc)
+      })
+      .catch(() => {
+        if (!active) {
+          return
+        }
+
+        setFailed(true)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [size, value])
+
+  if (failed) {
+    return <div className="small">Unable to render the QR image. Use the copy button below.</div>
+  }
+
+  if (!src) {
+    return <div className="small">Generating QR…</div>
+  }
+
+  return <img src={src} width={size} height={size} alt={alt} className="qrImage" />
 }
 
 function getStoredLocalAccountId(): string {
@@ -1614,7 +1678,7 @@ function App() {
                     <div className="qrTitle">Scan in Speed</div>
                     <div className="muted paymentHint">On desktop, scan this QR with your phone to open the Speed payment page.</div>
                     <div className="qrWrap">
-                      <QRCodeSVG value={paymentUrl} size={220} includeMargin />
+                      <QrCodeImage value={paymentUrl} size={220} alt="Speed payment QR code" />
                     </div>
                     <div className="copyRow">
                       <button
@@ -1633,7 +1697,7 @@ function App() {
                     <div className="qrTitle">Lightning Invoice (BOLT11)</div>
                     <div className="muted paymentHint">If your wallet supports Lightning invoice scanning, you can scan this directly.</div>
                     <div className="qrWrap">
-                      <QRCodeSVG value={paymentInfo.lightningInvoice} size={220} includeMargin />
+                      <QrCodeImage value={paymentInfo.lightningInvoice} size={220} alt="Lightning invoice QR code" />
                     </div>
                     <div className="copyRow">
                       <button
