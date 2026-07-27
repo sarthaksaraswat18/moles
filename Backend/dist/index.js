@@ -12,18 +12,41 @@ const store_1 = require("./store");
 dotenv_1.default.config();
 const app = (0, express_1.default)();
 const port = Number(process.env.PORT ?? 4000);
-const allowedOrigins = process.env.FRONTEND_ORIGIN
+const defaultAllowedOrigins = [
+    'http://localhost:4173',
+    'http://127.0.0.1:4173',
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'http://localhost:5174',
+    'http://127.0.0.1:5174',
+];
+const configuredAllowedOrigins = process.env.FRONTEND_ORIGIN
     ? process.env.FRONTEND_ORIGIN.split(',').map((origin) => origin.trim()).filter(Boolean)
-    : [
-        'http://localhost:4173',
-        'http://127.0.0.1:4173',
-        'http://localhost:5173',
-        'http://127.0.0.1:5173',
-        'http://localhost:5174',
-        'http://127.0.0.1:5174',
-    ];
+    : [];
+const allowedOrigins = new Set([...defaultAllowedOrigins, ...configuredAllowedOrigins]);
+function isAllowedOrigin(origin) {
+    if (!origin) {
+        return true;
+    }
+    if (allowedOrigins.has(origin)) {
+        return true;
+    }
+    try {
+        const { hostname, protocol } = new URL(origin);
+        const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1';
+        const isVercelPreview = hostname.endsWith('.vercel.app');
+        return (protocol === 'http:' && isLocalhost) || (protocol === 'https:' && isVercelPreview);
+    }
+    catch {
+        return false;
+    }
+}
 app.use((0, cors_1.default)({
-    origin: allowedOrigins,
+    origin: (origin, callback) => {
+        callback(null, isAllowedOrigin(origin));
+    },
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 app.use(express_1.default.json());
 function badRequest(message) {
