@@ -19,6 +19,7 @@ const DEFAULT_BET = 20
 const TOP_UP_OPTIONS = [5, 1000, 5000, 10000]
 const DEFAULT_MOLES = 3
 const LOCAL_DEV_ACCOUNT_STORAGE_KEY = 'moles-speed-local-account'
+const LOCALHOST_HOSTS = new Set(['localhost', '127.0.0.1'])
 const MULTIPLIER_TABLE: Record<number, number[]> = {
   1: [10.22, 48.02, 336.14, 2352.98, 16470.86, 115296.02],
   2: [3.43, 12, 42.01, 147.06, 514.71, 1801.5],
@@ -569,14 +570,35 @@ function mapResolvedRoundToVisualGame(
 }
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    cache: 'no-store',
-    ...init,
-    headers: {
-      'content-type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
-  })
+  const requestUrl = `${API_BASE_URL}${path}`
+  const isHostedFrontend = !LOCALHOST_HOSTS.has(window.location.hostname)
+  const isUsingLocalApiFallback =
+    API_BASE_URL.includes('localhost:4000') || API_BASE_URL.includes('127.0.0.1:4000')
+
+  if (isHostedFrontend && isUsingLocalApiFallback) {
+    throw new Error(
+      'Frontend API is still pointed at localhost. Set VITE_API_BASE_URL to your Render backend URL and update Render FRONTEND_ORIGIN to this frontend URL.',
+    )
+  }
+
+  let response: Response
+  try {
+    response = await fetch(requestUrl, {
+      cache: 'no-store',
+      ...init,
+      headers: {
+        'content-type': 'application/json',
+        ...(init?.headers ?? {}),
+      },
+    })
+  } catch (error) {
+    const message =
+      error instanceof Error && error.message
+        ? error.message
+        : 'Network request failed.'
+
+    throw new Error(`Unable to reach API at ${requestUrl}. ${message}`)
+  }
 
   const text = await response.text()
   const payload = text ? (JSON.parse(text) as T & ErrorResponse) : null
