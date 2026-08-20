@@ -533,10 +533,11 @@
 .moleMotion {
   position: absolute;
   left: 50%;
-  bottom: -18%;
+  bottom: -22%;
   width: 112%;
   height: 112%;
-  transform: translateX(-50%) translateY(120%) scale(0.66);
+  /* Default hidden pose (in case animations are disabled). */
+  transform: translateX(-50%) translateY(140%) scale(0.62);
   transform-origin: center bottom;
 }
 
@@ -877,30 +878,30 @@
 
 @keyframes mole-emerge {
   0% {
-    transform: translateX(-50%) translateY(120%) scale(0.6);
+    transform: translateX(-50%) translateY(140%) scale(0.62);
   }
 
   34% {
-    transform: translateX(-50%) translateY(54%) scale(0.66, 0.7);
+    transform: translateX(-50%) translateY(34%) scale(0.7, 0.76);
   }
 
   62% {
-    transform: translateX(-50%) translateY(18%) scale(0.69);
+    transform: translateX(-50%) translateY(-46%) scale(0.74);
   }
 
   100% {
-    transform: translateX(-50%) translateY(10%) scale(0.69);
+    transform: translateX(-50%) translateY(-40%) scale(0.74);
   }
 }
 
 @keyframes mole-idle {
   0%,
   100% {
-    transform: translateX(-50%) translateY(10%) scale(0.69);
+    transform: translateX(-50%) translateY(-40%) scale(0.74);
   }
 
   45% {
-    transform: translateX(-50%) translateY(6%) scale(0.71);
+    transform: translateX(-50%) translateY(-44%) scale(0.76);
   }
 }
 
