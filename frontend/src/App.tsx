@@ -34,7 +34,8 @@ const ROUND_CHANCE_TABLE: Record<number, number[]> = {
   3: [0.35, 0.2, 0.1, 0.001, 0.00008, 0.0001],
   4: [0.57, 0.32, 0.2, 0.12, 0.05, 0.0001],
   5: [0.8, 0.7, 0.57, 0.42, 0.3, 0.0001],
-  6: [0.92, 0.82, 1, 0.45, 0.3, 0.25],
+  // Keep this in sync with `Backend/config/game-config.json` for offline fallback.
+  6: [0.92, 0.82, 0.67, 0.45, 0.3, 0.25],
 }
 const TOP_ROW_HOLES = [0, 1]
 const MIDDLE_ROW_HOLES = [2, 3, 4]

@@ -512,7 +512,9 @@
 .moleViewport {
   position: absolute;
   inset: 0;
-  overflow: hidden;
+  /* Let the mole rise above the hole opening. The bottom masking is handled
+     by .moleFrontMask so it still looks like it's coming out of the hole. */
+  overflow: visible;
   border-radius: 50%;
 }
 
@@ -531,10 +533,10 @@
 .moleMotion {
   position: absolute;
   left: 50%;
-  bottom: -12%;
+  bottom: -18%;
   width: 112%;
   height: 112%;
-  transform: translateX(-50%) translateY(96%) scale(0.58);
+  transform: translateX(-50%) translateY(120%) scale(0.66);
   transform-origin: center bottom;
 }
 
@@ -875,30 +877,30 @@
 
 @keyframes mole-emerge {
   0% {
-    transform: translateX(-50%) translateY(96%) scale(0.52);
+    transform: translateX(-50%) translateY(120%) scale(0.6);
   }
 
   34% {
-    transform: translateX(-50%) translateY(42%) scale(0.58, 0.62);
+    transform: translateX(-50%) translateY(54%) scale(0.66, 0.7);
   }
 
   62% {
-    transform: translateX(-50%) translateY(36%) scale(0.6);
+    transform: translateX(-50%) translateY(18%) scale(0.69);
   }
 
   100% {
-    transform: translateX(-50%) translateY(38%) scale(0.6);
+    transform: translateX(-50%) translateY(10%) scale(0.69);
   }
 }
 
 @keyframes mole-idle {
   0%,
   100% {
-    transform: translateX(-50%) translateY(38%) scale(0.6);
+    transform: translateX(-50%) translateY(10%) scale(0.69);
   }
 
   45% {
-    transform: translateX(-50%) translateY(34%) scale(0.61);
+    transform: translateX(-50%) translateY(6%) scale(0.71);
   }
 }
 
