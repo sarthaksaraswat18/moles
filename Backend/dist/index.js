@@ -49,6 +49,13 @@ app.use((0, cors_1.default)({
     allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 app.use(express_1.default.json());
+app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    next();
+});
 function badRequest(message) {
     return {
         error: message,
@@ -214,6 +221,9 @@ app.post('/api/wallet/deposit-request', async (request, response) => {
                 lightningAddress: wallet.lightningAddress ?? lightningAddress,
                 purpose: 'topup',
             },
+            balanceBefore: wallet.balance,
+            balanceAfter: wallet.balance,
+            lightningAddress: wallet.lightningAddress ?? lightningAddress,
         });
         response.status(201).json({
             wallet,
@@ -272,7 +282,7 @@ app.get('/api/wallet/verify/:invoiceId', async (request, response) => {
         if (metadataAddress) {
             (0, store_1.bindWalletLightningAddress)(accountId, metadataAddress);
         }
-        const { credited, wallet } = (0, store_1.creditProcessedTopUp)({
+        const { credited, wallet, balanceBefore, balanceAfter } = (0, store_1.creditProcessedTopUp)({
             invoiceId,
             accountId,
             amountSats: paidAmount,
@@ -292,6 +302,9 @@ app.get('/api/wallet/verify/:invoiceId', async (request, response) => {
                 provider: 'speed',
                 note: 'Speed payment verified and credited to game balance',
                 metadata: metadata,
+                balanceBefore,
+                balanceAfter,
+                lightningAddress: wallet.lightningAddress ?? null,
             });
         }
         response.json({
@@ -331,7 +344,7 @@ app.post('/api/webhooks/speed/payments', (request, response) => {
     if (metadataAddress) {
         (0, store_1.bindWalletLightningAddress)(accountId, metadataAddress);
     }
-    const { credited, wallet } = (0, store_1.creditProcessedTopUp)({
+    const { credited, wallet, balanceBefore, balanceAfter } = (0, store_1.creditProcessedTopUp)({
         invoiceId: paymentId,
         accountId,
         amountSats: paidAmount,
@@ -354,6 +367,9 @@ app.post('/api/webhooks/speed/payments', (request, response) => {
         provider: 'speed',
         note: 'Speed payment confirmed and credited to game balance',
         metadata,
+        balanceBefore,
+        balanceAfter,
+        lightningAddress: wallet.lightningAddress ?? null,
     });
     response.json({
         ok: true,
@@ -413,6 +429,9 @@ app.post('/api/game/rounds', (request, response) => {
         metadata: {
             moleCount,
         },
+        balanceBefore: wallet.balance,
+        balanceAfter: Math.max(0, wallet.balance - betAmount),
+        lightningAddress: wallet.lightningAddress ?? null,
     });
     response.status(201).json({
         walletBalance: (0, store_1.getOrCreateWallet)(accountId).balance,
@@ -452,7 +471,8 @@ app.post('/api/game/reveal', (request, response) => {
         round.multiplier = 0;
         round.payout = 0;
         (0, store_1.saveRound)(round);
-        (0, store_1.appendHistory)(round, 'loss', 0, 0);
+        const lossWallet = (0, store_1.getOrCreateWallet)(round.accountId);
+        (0, store_1.appendHistory)(round, 'loss', 0, 0, lossWallet.balance, lossWallet.balance);
         (0, store_1.appendTransaction)({
             playerId: round.playerId,
             accountId: round.accountId,
@@ -468,6 +488,9 @@ app.post('/api/game/reveal', (request, response) => {
             metadata: {
                 selectedHole: holeIndex,
             },
+            balanceBefore: lossWallet.balance,
+            balanceAfter: lossWallet.balance,
+            lightningAddress: lossWallet.lightningAddress ?? null,
         });
         response.json({
             hit: false,
@@ -483,8 +506,10 @@ app.post('/api/game/reveal', (request, response) => {
         round.stage = 'won-all';
         (0, store_1.saveRound)(round);
         const wallet = (0, store_1.getOrCreateWallet)(round.accountId);
+        const balanceBeforeMaxWin = wallet.balance;
         (0, store_1.updateWalletBalance)(round.accountId, wallet.balance + round.payout);
-        (0, store_1.appendHistory)(round, 'max-win', round.multiplier, round.payout);
+        const balanceAfterMaxWin = (0, store_1.getOrCreateWallet)(round.accountId).balance;
+        (0, store_1.appendHistory)(round, 'max-win', round.multiplier, round.payout, balanceBeforeMaxWin, balanceAfterMaxWin);
         (0, store_1.appendTransaction)({
             playerId: round.playerId,
             accountId: round.accountId,
@@ -500,6 +525,9 @@ app.post('/api/game/reveal', (request, response) => {
             metadata: {
                 hitCount: round.hitCount,
             },
+            balanceBefore: balanceBeforeMaxWin,
+            balanceAfter: balanceAfterMaxWin,
+            lightningAddress: (0, store_1.getOrCreateWallet)(round.accountId).lightningAddress ?? null,
         });
         response.json({
             hit: true,
@@ -535,8 +563,10 @@ app.post('/api/game/cashout', (request, response) => {
     round.stage = 'cashed-out';
     (0, store_1.saveRound)(round);
     const wallet = (0, store_1.getOrCreateWallet)(round.accountId);
+    const balanceBeforeCashout = wallet.balance;
     (0, store_1.updateWalletBalance)(round.accountId, wallet.balance + round.payout);
-    (0, store_1.appendHistory)(round, 'cashout', round.multiplier, round.payout);
+    const balanceAfterCashout = (0, store_1.getOrCreateWallet)(round.accountId).balance;
+    (0, store_1.appendHistory)(round, 'cashout', round.multiplier, round.payout, balanceBeforeCashout, balanceAfterCashout);
     (0, store_1.appendTransaction)({
         playerId: round.playerId,
         accountId: round.accountId,
@@ -552,6 +582,9 @@ app.post('/api/game/cashout', (request, response) => {
         metadata: {
             hitCount: round.hitCount,
         },
+        balanceBefore: balanceBeforeCashout,
+        balanceAfter: balanceAfterCashout,
+        lightningAddress: (0, store_1.getOrCreateWallet)(round.accountId).lightningAddress ?? null,
     });
     response.json({
         walletBalance: (0, store_1.getOrCreateWallet)(round.accountId).balance,
@@ -637,6 +670,9 @@ async function handleWithdraw(request, response) {
             recipient: (0, speed_1.formatLightningAddress)(lightningAddress),
             reason: 'manual_withdraw',
         },
+        balanceBefore: balanceBefore,
+        balanceAfter: Math.max(0, balanceBefore - withdrawAmount),
+        lightningAddress: (0, speed_1.formatLightningAddress)(lightningAddress),
     });
     try {
         const payout = await (0, speed_1.createSpeedInstantSend)({
@@ -664,6 +700,9 @@ async function handleWithdraw(request, response) {
                 withdrawRequest: payout.withdraw_request ?? (0, speed_1.formatLightningAddress)(lightningAddress),
                 reason: 'manual_withdraw',
             },
+            balanceBefore: balanceBefore,
+            balanceAfter: completedWallet.balance,
+            lightningAddress: (0, speed_1.formatLightningAddress)(lightningAddress),
         });
         response.status(201).json({
             wallet: completedWallet,

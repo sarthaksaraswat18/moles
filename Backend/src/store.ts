@@ -197,12 +197,14 @@ export function creditProcessedTopUp(params: {
   invoiceId: string
   accountId: string
   amountSats: number
-}): { credited: boolean; wallet: PlayerWallet } {
+}): { credited: boolean; wallet: PlayerWallet; balanceBefore: number; balanceAfter: number } {
   if (processedInvoices.has(params.invoiceId)) {
-    return { credited: false, wallet: getOrCreateWallet(params.accountId) }
+    const existingWallet = getOrCreateWallet(params.accountId)
+    return { credited: false, wallet: existingWallet, balanceBefore: existingWallet.balance, balanceAfter: existingWallet.balance }
   }
 
   const wallet = getOrCreateWallet(params.accountId)
+  const balanceBefore = wallet.balance
   const nextBalance = wallet.balance + params.amountSats
   wallet.balance = nextBalance
   wallet.updatedAt = new Date().toISOString()
@@ -216,7 +218,7 @@ export function creditProcessedTopUp(params: {
   })
 
   persistLedger()
-  return { credited: true, wallet }
+  return { credited: true, wallet, balanceBefore, balanceAfter: wallet.balance }
 }
 
 export function updateWalletBalance(accountId: string, nextBalance: number): PlayerWallet {
@@ -302,7 +304,13 @@ export function appendHistory(
   result: RoundHistoryResult,
   multiplier: number,
   payout: number,
+  balanceBefore?: number,
+  balanceAfter?: number,
 ): HistoryEntry {
+  const wallet = getOrCreateWallet(round.accountId)
+  const before = typeof balanceBefore === 'number' ? balanceBefore : wallet.balance
+  const after = typeof balanceAfter === 'number' ? balanceAfter : wallet.balance
+
   const entry: HistoryEntry = {
     id: randomUUID(),
     playerId: round.playerId,
@@ -314,6 +322,9 @@ export function appendHistory(
     roundReached: round.hitCount,
     multiplier,
     payout,
+    balanceBefore: before,
+    balanceAfter: after,
+    lightningAddress: wallet.lightningAddress ?? null,
     createdAt: new Date().toISOString(),
   }
 

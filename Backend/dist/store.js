@@ -163,9 +163,11 @@ function hasProcessedInvoice(invoiceId) {
 }
 function creditProcessedTopUp(params) {
     if (processedInvoices.has(params.invoiceId)) {
-        return { credited: false, wallet: getOrCreateWallet(params.accountId) };
+        const existingWallet = getOrCreateWallet(params.accountId);
+        return { credited: false, wallet: existingWallet, balanceBefore: existingWallet.balance, balanceAfter: existingWallet.balance };
     }
     const wallet = getOrCreateWallet(params.accountId);
+    const balanceBefore = wallet.balance;
     const nextBalance = wallet.balance + params.amountSats;
     wallet.balance = nextBalance;
     wallet.updatedAt = new Date().toISOString();
@@ -177,7 +179,7 @@ function creditProcessedTopUp(params) {
         processedAt: new Date().toISOString(),
     });
     persistLedger();
-    return { credited: true, wallet };
+    return { credited: true, wallet, balanceBefore, balanceAfter: wallet.balance };
 }
 function updateWalletBalance(accountId, nextBalance) {
     const wallet = getOrCreateWallet(accountId);
@@ -237,7 +239,10 @@ function listHistory(playerId) {
         .filter((entry) => (playerId ? entry.playerId === playerId : true))
         .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 }
-function appendHistory(round, result, multiplier, payout) {
+function appendHistory(round, result, multiplier, payout, balanceBefore, balanceAfter) {
+    const wallet = getOrCreateWallet(round.accountId);
+    const before = typeof balanceBefore === 'number' ? balanceBefore : wallet.balance;
+    const after = typeof balanceAfter === 'number' ? balanceAfter : wallet.balance;
     const entry = {
         id: (0, crypto_1.randomUUID)(),
         playerId: round.playerId,
@@ -249,6 +254,9 @@ function appendHistory(round, result, multiplier, payout) {
         roundReached: round.hitCount,
         multiplier,
         payout,
+        balanceBefore: before,
+        balanceAfter: after,
+        lightningAddress: wallet.lightningAddress ?? null,
         createdAt: new Date().toISOString(),
     };
     history.unshift(entry);

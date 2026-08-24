@@ -45,6 +45,9 @@ export interface HistoryEntry {
   roundReached: number
   multiplier: number
   payout: number
+  balanceBefore: number
+  balanceAfter: number
+  lightningAddress?: string | null
   createdAt: string
 }
 
@@ -100,6 +103,9 @@ export interface TransactionEntry {
   provider: 'speed' | 'internal'
   note: string | null
   metadata: Record<string, unknown>
+  balanceBefore?: number
+  balanceAfter?: number
+  lightningAddress?: string | null
   createdAt: string
 }
 

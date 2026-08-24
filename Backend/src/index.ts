@@ -80,6 +80,14 @@ app.use(
 )
 app.use(express.json())
 
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('X-Frame-Options', 'DENY')
+  res.setHeader('Referrer-Policy', 'no-referrer')
+  res.setHeader('X-XSS-Protection', '1; mode=block')
+  next()
+})
+
 function badRequest(message: string) {
   return {
     error: message,
@@ -284,6 +292,9 @@ app.post('/api/wallet/deposit-request', async (request, response) => {
         lightningAddress: wallet.lightningAddress ?? lightningAddress,
         purpose: 'topup',
       },
+      balanceBefore: wallet.balance,
+      balanceAfter: wallet.balance,
+      lightningAddress: wallet.lightningAddress ?? lightningAddress,
     })
 
     response.status(201).json({
@@ -356,7 +367,7 @@ app.get('/api/wallet/verify/:invoiceId', async (request, response) => {
       bindWalletLightningAddress(accountId, metadataAddress)
     }
 
-    const { credited, wallet } = creditProcessedTopUp({
+    const { credited, wallet, balanceBefore, balanceAfter } = creditProcessedTopUp({
       invoiceId,
       accountId,
       amountSats: paidAmount,
@@ -377,6 +388,9 @@ app.get('/api/wallet/verify/:invoiceId', async (request, response) => {
         provider: 'speed',
         note: 'Speed payment verified and credited to game balance',
         metadata: metadata as Record<string, unknown>,
+        balanceBefore,
+        balanceAfter,
+        lightningAddress: wallet.lightningAddress ?? null,
       })
     }
 
@@ -422,7 +436,7 @@ app.post('/api/webhooks/speed/payments', (request, response) => {
     bindWalletLightningAddress(accountId, metadataAddress)
   }
 
-  const { credited, wallet } = creditProcessedTopUp({
+  const { credited, wallet, balanceBefore, balanceAfter } = creditProcessedTopUp({
     invoiceId: paymentId,
     accountId,
     amountSats: paidAmount,
@@ -448,6 +462,9 @@ app.post('/api/webhooks/speed/payments', (request, response) => {
     provider: 'speed',
     note: 'Speed payment confirmed and credited to game balance',
     metadata,
+    balanceBefore,
+    balanceAfter,
+    lightningAddress: wallet.lightningAddress ?? null,
   })
 
   response.json({
@@ -522,6 +539,9 @@ app.post('/api/game/rounds', (request, response) => {
     metadata: {
       moleCount,
     },
+    balanceBefore: wallet.balance,
+    balanceAfter: Math.max(0, wallet.balance - betAmount),
+    lightningAddress: wallet.lightningAddress ?? null,
   })
 
   response.status(201).json({
@@ -573,7 +593,8 @@ app.post('/api/game/reveal', (request, response) => {
     round.multiplier = 0
     round.payout = 0
     saveRound(round)
-    appendHistory(round, 'loss', 0, 0)
+    const lossWallet = getOrCreateWallet(round.accountId)
+    appendHistory(round, 'loss', 0, 0, lossWallet.balance, lossWallet.balance)
     appendTransaction({
       playerId: round.playerId,
       accountId: round.accountId,
@@ -589,6 +610,9 @@ app.post('/api/game/reveal', (request, response) => {
       metadata: {
         selectedHole: holeIndex,
       },
+      balanceBefore: lossWallet.balance,
+      balanceAfter: lossWallet.balance,
+      lightningAddress: lossWallet.lightningAddress ?? null,
     })
 
     response.json({
@@ -608,8 +632,10 @@ app.post('/api/game/reveal', (request, response) => {
     saveRound(round)
 
     const wallet = getOrCreateWallet(round.accountId)
+    const balanceBeforeMaxWin = wallet.balance
     updateWalletBalance(round.accountId, wallet.balance + round.payout)
-    appendHistory(round, 'max-win', round.multiplier, round.payout)
+    const balanceAfterMaxWin = getOrCreateWallet(round.accountId).balance
+    appendHistory(round, 'max-win', round.multiplier, round.payout, balanceBeforeMaxWin, balanceAfterMaxWin)
     appendTransaction({
       playerId: round.playerId,
       accountId: round.accountId,
@@ -625,6 +651,9 @@ app.post('/api/game/reveal', (request, response) => {
       metadata: {
         hitCount: round.hitCount,
       },
+      balanceBefore: balanceBeforeMaxWin,
+      balanceAfter: balanceAfterMaxWin,
+      lightningAddress: getOrCreateWallet(round.accountId).lightningAddress ?? null,
     })
 
     response.json({
@@ -671,8 +700,10 @@ app.post('/api/game/cashout', (request, response) => {
   saveRound(round)
 
   const wallet = getOrCreateWallet(round.accountId)
+  const balanceBeforeCashout = wallet.balance
   updateWalletBalance(round.accountId, wallet.balance + round.payout)
-  appendHistory(round, 'cashout', round.multiplier, round.payout)
+  const balanceAfterCashout = getOrCreateWallet(round.accountId).balance
+  appendHistory(round, 'cashout', round.multiplier, round.payout, balanceBeforeCashout, balanceAfterCashout)
   appendTransaction({
     playerId: round.playerId,
     accountId: round.accountId,
@@ -688,6 +719,9 @@ app.post('/api/game/cashout', (request, response) => {
     metadata: {
       hitCount: round.hitCount,
     },
+    balanceBefore: balanceBeforeCashout,
+    balanceAfter: balanceAfterCashout,
+    lightningAddress: getOrCreateWallet(round.accountId).lightningAddress ?? null,
   })
 
   response.json({
@@ -794,6 +828,9 @@ async function handleWithdraw(request: express.Request, response: express.Respon
       recipient: formatLightningAddress(lightningAddress),
       reason: 'manual_withdraw',
     },
+    balanceBefore: balanceBefore,
+    balanceAfter: Math.max(0, balanceBefore - withdrawAmount),
+    lightningAddress: formatLightningAddress(lightningAddress),
   })
 
   try {
@@ -824,6 +861,9 @@ async function handleWithdraw(request: express.Request, response: express.Respon
         withdrawRequest: payout.withdraw_request ?? formatLightningAddress(lightningAddress),
         reason: 'manual_withdraw',
       },
+      balanceBefore: balanceBefore,
+      balanceAfter: completedWallet.balance,
+      lightningAddress: formatLightningAddress(lightningAddress),
     })
 
     response.status(201).json({
