@@ -512,9 +512,8 @@
 .moleViewport {
   position: absolute;
   inset: 0;
-  /* Let the mole rise above the hole opening. The bottom masking is handled
-     by .moleFrontMask so it still looks like it's coming out of the hole. */
-  overflow: visible;
+  /* Mask the bottom so mole parts below the hole are hidden until the mole rises. */
+  overflow: hidden;
   border-radius: 50%;
 }
 
@@ -541,6 +540,8 @@
   transform-origin: center bottom;
   /* Start fully transparent so the mole body fades in as it rises. */
   opacity: 0;
+  /* Ensure explicit layering relative to hole elements. */
+  z-index: 6;
 }
 
 .moleArt {
@@ -558,7 +559,8 @@
   transform: translateX(-50%);
   border-radius: 50%;
   background: linear-gradient(180deg, transparent 0%, #385367 38%, #284557 100%);
-  z-index: 4;
+  /* Put the lip mask above the mole during emergence but below dust/hammer. */
+  z-index: 12;
   pointer-events: none;
 }
 
