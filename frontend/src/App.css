@@ -539,6 +539,8 @@
   /* Default hidden pose (in case animations are disabled). */
   transform: translateX(-50%) translateY(140%) scale(0.62);
   transform-origin: center bottom;
+  /* Start fully transparent so the mole body fades in as it rises. */
+  opacity: 0;
 }
 
 .moleArt {
@@ -877,20 +879,28 @@
 }
 
 @keyframes mole-emerge {
+  /* The mole should be fully hidden at the start and fade in as it rises. */
   0% {
     transform: translateX(-50%) translateY(140%) scale(0.62);
+    opacity: 0;
   }
 
+  /* Partially risen — start becoming visible. */
   34% {
     transform: translateX(-50%) translateY(34%) scale(0.7, 0.76);
+    opacity: 0.25;
   }
 
+  /* Mostly up — nearly fully visible. */
   62% {
     transform: translateX(-50%) translateY(-46%) scale(0.74);
+    opacity: 0.9;
   }
 
+  /* Final pose — fully visible. */
   100% {
     transform: translateX(-50%) translateY(-40%) scale(0.74);
+    opacity: 1;
   }
 }
 
