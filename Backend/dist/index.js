@@ -6,12 +6,19 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const cors_1 = __importDefault(require("cors"));
 const dotenv_1 = __importDefault(require("dotenv"));
 const express_1 = __importDefault(require("express"));
+const node_cron_1 = __importDefault(require("node-cron"));
 const game_1 = require("./game");
 const speed_1 = require("./speed");
 const store_1 = require("./store");
 dotenv_1.default.config();
 const app = (0, express_1.default)();
 const port = Number(process.env.PORT ?? 4000);
+const keepaliveTimeoutMs = Number(process.env.KEEPALIVE_TIMEOUT_MS ?? 10000);
+const keepaliveIntervalMinutes = Number(process.env.KEEPALIVE_INTERVAL_MINUTES ?? 5);
+const keepaliveUrls = [
+    ...(process.env.KEEPALIVE_URL ? process.env.KEEPALIVE_URL.split(',').map((value) => value.trim()).filter(Boolean) : []),
+    `http://localhost:${port}/api/health`,
+].filter((value, index, array) => array.indexOf(value) === index);
 const defaultAllowedOrigins = [
     'http://localhost:4173',
     'http://127.0.0.1:4173',
@@ -56,6 +63,41 @@ app.use((req, res, next) => {
     res.setHeader('X-XSS-Protection', '1; mode=block');
     next();
 });
+function pingKeepaliveTarget(url) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), keepaliveTimeoutMs);
+    return fetch(url, {
+        method: 'GET',
+        signal: controller.signal,
+        headers: {
+            'User-Agent': 'moles-keepalive/1.0',
+        },
+    })
+        .then(async (response) => {
+        if (!response.ok) {
+            throw new Error(`Ping failed with status ${response.status} for ${url}`);
+        }
+        return undefined;
+    })
+        .catch((error) => {
+        console.warn(`Keepalive ping failed for ${url}:`, error instanceof Error ? error.message : error);
+    })
+        .finally(() => {
+        clearTimeout(timer);
+    });
+}
+async function runKeepaliveCheck() {
+    const targets = keepaliveUrls.length > 0 ? keepaliveUrls : [`http://localhost:${port}/api/health`];
+    for (const url of targets) {
+        await pingKeepaliveTarget(url);
+    }
+}
+if (Number.isFinite(keepaliveIntervalMinutes) && keepaliveIntervalMinutes > 0) {
+    node_cron_1.default.schedule(`*/${Math.max(1, Math.floor(keepaliveIntervalMinutes))} * * * *`, async () => {
+        console.log('Running keepalive ping check...');
+        await runKeepaliveCheck();
+    });
+}
 function badRequest(message) {
     return {
         error: message,
@@ -140,6 +182,7 @@ app.get('/api/game/config', (_request, response) => {
         maxRounds: (0, game_1.getMaxRounds)(),
         multiplierTable: (0, game_1.getMultiplierTable)(),
         roundChanceTable: (0, game_1.getRoundChanceTable)(),
+        betSizeChanceTables: (0, game_1.getBetSizeChanceTables)(),
     });
 });
 app.get('/api/wallet/context', (request, response) => {
@@ -457,7 +500,7 @@ app.post('/api/game/reveal', (request, response) => {
         response.status(400).json(badRequest('This round is not waiting for a pick.'));
         return;
     }
-    const hitChance = (0, game_1.getRoundHitChance)(round.moleCount, round.currentRound);
+    const hitChance = (0, game_1.getRoundHitChance)(round.moleCount, round.currentRound, round.betAmount);
     const hit = Math.random() < hitChance;
     const revealedHoles = (0, game_1.createRevealHoles)(round.moleCount, holeIndex, hit);
     round.revealedHistory.push({

@@ -10,6 +10,7 @@ exports.getMaxRounds = getMaxRounds;
 exports.getHoleCount = getHoleCount;
 exports.getMultiplierTable = getMultiplierTable;
 exports.getRoundChanceTable = getRoundChanceTable;
+exports.getBetSizeChanceTables = getBetSizeChanceTables;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const CONFIG_PATH = path_1.default.resolve(__dirname, '..', 'config', 'game-config.json');
@@ -39,12 +40,19 @@ let lastConfigError = null;
 function cloneTable(table) {
     return Object.fromEntries(Object.entries(table).map(([moleCount, values]) => [Number(moleCount), [...values]]));
 }
+function cloneBetSizeChanceTables(tables) {
+    if (!tables) {
+        return undefined;
+    }
+    return Object.fromEntries(Object.entries(tables).map(([betSize, table]) => [Number(betSize), cloneTable(table)]));
+}
 function cloneConfig(config) {
     return {
         holeCount: config.holeCount,
         maxRounds: config.maxRounds,
         multiplierTable: cloneTable(config.multiplierTable),
         roundChanceTable: cloneTable(config.roundChanceTable),
+        betSizeChanceTables: cloneBetSizeChanceTables(config.betSizeChanceTables),
     };
 }
 function logConfigError(message) {
@@ -74,15 +82,32 @@ function parseTable(value, field) {
         return [numericMoleCount, [...entries]];
     }));
 }
+function parseBetSizeChanceTables(value, field) {
+    if (value === undefined || value === null) {
+        return undefined;
+    }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error(`${field} must be an object keyed by bet size.`);
+    }
+    return Object.fromEntries(Object.entries(value).map(([betSize, table]) => {
+        const numericBetSize = Number(betSize);
+        if (!Number.isFinite(numericBetSize) || numericBetSize <= 0) {
+            throw new Error(`${field} contains an invalid bet size: ${betSize}.`);
+        }
+        return [numericBetSize, parseTable(table, `${field}[${betSize}]`)];
+    }));
+}
 function parseConfig(raw) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
         throw new Error('Game config must be a JSON object.');
     }
+    const rec = raw;
     return {
-        holeCount: parsePositiveInteger(raw.holeCount, 'holeCount'),
-        maxRounds: parsePositiveInteger(raw.maxRounds, 'maxRounds'),
-        multiplierTable: parseTable(raw.multiplierTable, 'multiplierTable'),
-        roundChanceTable: parseTable(raw.roundChanceTable, 'roundChanceTable'),
+        holeCount: parsePositiveInteger(rec.holeCount, 'holeCount'),
+        maxRounds: parsePositiveInteger(rec.maxRounds, 'maxRounds'),
+        multiplierTable: parseTable(rec.multiplierTable, 'multiplierTable'),
+        roundChanceTable: parseTable(rec.roundChanceTable, 'roundChanceTable'),
+        betSizeChanceTables: parseBetSizeChanceTables(rec.betSizeChanceTables, 'betSizeChanceTables'),
     };
 }
 function getGameConfig() {
@@ -128,8 +153,35 @@ function randomUniqueHoles(holeCount, count, options) {
     }
     return Array.from(result);
 }
-function getRoundHitChance(moleCount, round) {
-    const roundChances = getGameConfig().roundChanceTable[moleCount];
+function getChanceTableForBetAmount(config, betAmount) {
+    const tables = config.betSizeChanceTables;
+    if (!tables || Object.keys(tables).length === 0) {
+        return config.roundChanceTable;
+    }
+    const betSizes = Object.keys(tables).map(Number).sort((left, right) => left - right);
+    const exact = tables[betAmount];
+    if (exact) {
+        return exact;
+    }
+    let bestBetSize = betSizes[0];
+    let bestDelta = Math.abs(bestBetSize - betAmount);
+    for (const tier of betSizes.slice(1)) {
+        const delta = Math.abs(tier - betAmount);
+        if (delta < bestDelta) {
+            bestBetSize = tier;
+            bestDelta = delta;
+        }
+    }
+    return tables[bestBetSize] ?? config.roundChanceTable;
+}
+const MAX_PLAYER_PROFIT_SATS = 500;
+const HOUSE_RTP_TARGET = 0.7;
+function getRoundHitChance(moleCount, round, betAmount) {
+    const config = getGameConfig();
+    const chanceTable = typeof betAmount === 'number' && Number.isFinite(betAmount)
+        ? getChanceTableForBetAmount(config, betAmount)
+        : config.roundChanceTable;
+    const roundChances = chanceTable[moleCount];
     if (!roundChances) {
         throw new Error(`Unsupported mole count: ${moleCount}`);
     }
@@ -137,7 +189,20 @@ function getRoundHitChance(moleCount, round) {
     if (typeof hitChance !== 'number') {
         throw new Error(`Unsupported round ${round} for mole count ${moleCount}`);
     }
-    return hitChance;
+    let effectiveChance = hitChance;
+    if (typeof betAmount === 'number' && Number.isFinite(betAmount)) {
+        const multiplier = config.multiplierTable[moleCount]?.[round - 1];
+        if (typeof multiplier !== 'number') {
+            throw new Error(`Unsupported round ${round} for mole count ${moleCount}`);
+        }
+        const potentialPayout = Math.floor(betAmount * multiplier);
+        const potentialProfit = potentialPayout - betAmount;
+        if (potentialProfit > MAX_PLAYER_PROFIT_SATS) {
+            effectiveChance *= MAX_PLAYER_PROFIT_SATS / potentialProfit;
+        }
+    }
+    effectiveChance *= HOUSE_RTP_TARGET;
+    return Math.min(Math.max(effectiveChance, 0), 1);
 }
 function getMultiplier(moleCount, hitCount) {
     if (hitCount === 0) {
@@ -166,4 +231,10 @@ function getMultiplierTable() {
 }
 function getRoundChanceTable() {
     return cloneTable(getGameConfig().roundChanceTable);
+}
+function getBetSizeChanceTables() {
+    const config = getGameConfig();
+    return cloneBetSizeChanceTables(config.betSizeChanceTables) ?? {
+        100: cloneTable(config.roundChanceTable),
+    };
 }

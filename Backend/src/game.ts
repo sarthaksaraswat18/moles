@@ -2,12 +2,14 @@ import fs from 'fs'
 import path from 'path'
 
 type GameTable = Record<number, number[]>
+type BetSizeChanceTables = Record<number, GameTable>
 
 interface GameConfig {
   holeCount: number
   maxRounds: number
   multiplierTable: GameTable
   roundChanceTable: GameTable
+  betSizeChanceTables?: BetSizeChanceTables
 }
 
 const CONFIG_PATH = path.resolve(__dirname, '..', 'config', 'game-config.json')
@@ -42,12 +44,23 @@ function cloneTable(table: GameTable): GameTable {
   )
 }
 
+function cloneBetSizeChanceTables(tables: BetSizeChanceTables | undefined): BetSizeChanceTables | undefined {
+  if (!tables) {
+    return undefined
+  }
+
+  return Object.fromEntries(
+    Object.entries(tables).map(([betSize, table]) => [Number(betSize), cloneTable(table)]),
+  )
+}
+
 function cloneConfig(config: GameConfig): GameConfig {
   return {
     holeCount: config.holeCount,
     maxRounds: config.maxRounds,
     multiplierTable: cloneTable(config.multiplierTable),
     roundChanceTable: cloneTable(config.roundChanceTable),
+    betSizeChanceTables: cloneBetSizeChanceTables(config.betSizeChanceTables),
   }
 }
 
@@ -87,16 +100,40 @@ function parseTable(value: unknown, field: string): GameTable {
   )
 }
 
+function parseBetSizeChanceTables(value: unknown, field: string): BetSizeChanceTables | undefined {
+  if (value === undefined || value === null) {
+    return undefined
+  }
+
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${field} must be an object keyed by bet size.`)
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).map(([betSize, table]) => {
+      const numericBetSize = Number(betSize)
+      if (!Number.isFinite(numericBetSize) || numericBetSize <= 0) {
+        throw new Error(`${field} contains an invalid bet size: ${betSize}.`)
+      }
+
+      return [numericBetSize, parseTable(table, `${field}[${betSize}]`)]
+    }),
+  )
+}
+
 function parseConfig(raw: unknown): GameConfig {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new Error('Game config must be a JSON object.')
   }
 
+  const rec = raw as Record<string, unknown>
+
   return {
-    holeCount: parsePositiveInteger((raw as Record<string, unknown>).holeCount, 'holeCount'),
-    maxRounds: parsePositiveInteger((raw as Record<string, unknown>).maxRounds, 'maxRounds'),
-    multiplierTable: parseTable((raw as Record<string, unknown>).multiplierTable, 'multiplierTable'),
-    roundChanceTable: parseTable((raw as Record<string, unknown>).roundChanceTable, 'roundChanceTable'),
+    holeCount: parsePositiveInteger(rec.holeCount, 'holeCount'),
+    maxRounds: parsePositiveInteger(rec.maxRounds, 'maxRounds'),
+    multiplierTable: parseTable(rec.multiplierTable, 'multiplierTable'),
+    roundChanceTable: parseTable(rec.roundChanceTable, 'roundChanceTable'),
+    betSizeChanceTables: parseBetSizeChanceTables(rec.betSizeChanceTables, 'betSizeChanceTables'),
   }
 }
 
@@ -151,8 +188,42 @@ function randomUniqueHoles(holeCount: number, count: number, options?: { include
   return Array.from(result)
 }
 
-export function getRoundHitChance(moleCount: number, round: number): number {
-  const roundChances = getGameConfig().roundChanceTable[moleCount]
+function getChanceTableForBetAmount(config: GameConfig, betAmount: number): GameTable {
+  const tables = config.betSizeChanceTables
+  if (!tables || Object.keys(tables).length === 0) {
+    return config.roundChanceTable
+  }
+
+  const betSizes = Object.keys(tables).map(Number).sort((left, right) => left - right)
+  const exact = tables[betAmount]
+  if (exact) {
+    return exact
+  }
+
+  let bestBetSize = betSizes[0]
+  let bestDelta = Math.abs(bestBetSize - betAmount)
+
+  for (const tier of betSizes.slice(1)) {
+    const delta = Math.abs(tier - betAmount)
+    if (delta < bestDelta) {
+      bestBetSize = tier
+      bestDelta = delta
+    }
+  }
+
+  return tables[bestBetSize] ?? config.roundChanceTable
+}
+
+const MAX_PLAYER_PROFIT_SATS = 500
+const HOUSE_RTP_TARGET = 0.7
+
+export function getRoundHitChance(moleCount: number, round: number, betAmount?: number): number {
+  const config = getGameConfig()
+  const chanceTable = typeof betAmount === 'number' && Number.isFinite(betAmount)
+    ? getChanceTableForBetAmount(config, betAmount)
+    : config.roundChanceTable
+
+  const roundChances = chanceTable[moleCount]
   if (!roundChances) {
     throw new Error(`Unsupported mole count: ${moleCount}`)
   }
@@ -162,7 +233,24 @@ export function getRoundHitChance(moleCount: number, round: number): number {
     throw new Error(`Unsupported round ${round} for mole count ${moleCount}`)
   }
 
-  return hitChance
+  let effectiveChance = hitChance
+
+  if (typeof betAmount === 'number' && Number.isFinite(betAmount)) {
+    const multiplier = config.multiplierTable[moleCount]?.[round - 1]
+    if (typeof multiplier !== 'number') {
+      throw new Error(`Unsupported round ${round} for mole count ${moleCount}`)
+    }
+
+    const potentialPayout = Math.floor(betAmount * multiplier)
+    const potentialProfit = potentialPayout - betAmount
+    if (potentialProfit > MAX_PLAYER_PROFIT_SATS) {
+      effectiveChance *= MAX_PLAYER_PROFIT_SATS / potentialProfit
+    }
+  }
+
+  effectiveChance *= HOUSE_RTP_TARGET
+
+  return Math.min(Math.max(effectiveChance, 0), 1)
 }
 
 export function getMultiplier(moleCount: number, hitCount: number): number {
@@ -199,4 +287,11 @@ export function getMultiplierTable(): GameTable {
 
 export function getRoundChanceTable(): GameTable {
   return cloneTable(getGameConfig().roundChanceTable)
+}
+
+export function getBetSizeChanceTables(): Record<number, GameTable> {
+  const config = getGameConfig()
+  return cloneBetSizeChanceTables(config.betSizeChanceTables) ?? {
+    100: cloneTable(config.roundChanceTable),
+  }
 }

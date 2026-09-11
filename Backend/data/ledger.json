@@ -54,6 +54,17 @@
       "lastKnownSpeedBalanceSats": null,
       "createdAt": "2026-07-09T07:46:08.917Z",
       "updatedAt": "2026-07-09T08:03:08.089Z"
+    },
+    "local-dev-mf1llbsjrf": {
+      "playerId": "local-dev-mf1llbsjrf",
+      "accountId": "local-dev-mf1llbsjrf",
+      "lightningAddress": null,
+      "balance": 0,
+      "holdSats": 0,
+      "pendingWithdrawal": null,
+      "lastKnownSpeedBalanceSats": null,
+      "createdAt": "2026-08-26T05:54:53.528Z",
+      "updatedAt": "2026-08-26T06:06:58.473Z"
     }
   },
   "rounds": {},

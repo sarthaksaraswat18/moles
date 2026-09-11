@@ -1,9 +1,11 @@
 import cors from 'cors'
 import dotenv from 'dotenv'
 import express from 'express'
+import cron from 'node-cron'
 
 import {
   createRevealHoles,
+  getBetSizeChanceTables,
   getHoleCount,
   getMaxRounds,
   getMultiplier,
@@ -36,6 +38,13 @@ dotenv.config()
 
 const app = express()
 const port = Number(process.env.PORT ?? 4000)
+const keepaliveTimeoutMs = Number(process.env.KEEPALIVE_TIMEOUT_MS ?? 10000)
+const keepaliveIntervalMinutes = Number(process.env.KEEPALIVE_INTERVAL_MINUTES ?? 5)
+const keepaliveUrls = [
+  ...(process.env.KEEPALIVE_URL ? process.env.KEEPALIVE_URL.split(',').map((value) => value.trim()).filter(Boolean) : []),
+  `http://localhost:${port}/api/health`,
+].filter((value, index, array) => array.indexOf(value) === index)
+
 const defaultAllowedOrigins = [
   'http://localhost:4173',
   'http://127.0.0.1:4173',
@@ -87,6 +96,47 @@ app.use((req, res, next) => {
   res.setHeader('X-XSS-Protection', '1; mode=block')
   next()
 })
+
+function pingKeepaliveTarget(url: string): Promise<void> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), keepaliveTimeoutMs)
+
+  return fetch(url, {
+    method: 'GET',
+    signal: controller.signal,
+    headers: {
+      'User-Agent': 'moles-keepalive/1.0',
+    },
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        throw new Error(`Ping failed with status ${response.status} for ${url}`)
+      }
+
+      return undefined
+    })
+    .catch((error) => {
+      console.warn(`Keepalive ping failed for ${url}:`, error instanceof Error ? error.message : error)
+    })
+    .finally(() => {
+      clearTimeout(timer)
+    })
+}
+
+async function runKeepaliveCheck(): Promise<void> {
+  const targets = keepaliveUrls.length > 0 ? keepaliveUrls : [`http://localhost:${port}/api/health`]
+
+  for (const url of targets) {
+    await pingKeepaliveTarget(url)
+  }
+}
+
+if (Number.isFinite(keepaliveIntervalMinutes) && keepaliveIntervalMinutes > 0) {
+  cron.schedule(`*/${Math.max(1, Math.floor(keepaliveIntervalMinutes))} * * * *`, async () => {
+    console.log('Running keepalive ping check...')
+    await runKeepaliveCheck()
+  })
+}
 
 function badRequest(message: string) {
   return {
@@ -196,6 +246,7 @@ app.get('/api/game/config', (_request, response) => {
     maxRounds: getMaxRounds(),
     multiplierTable: getMultiplierTable(),
     roundChanceTable: getRoundChanceTable(),
+    betSizeChanceTables: getBetSizeChanceTables(),
   })
 })
 
@@ -577,7 +628,7 @@ app.post('/api/game/reveal', (request, response) => {
     return
   }
 
-  const hitChance = getRoundHitChance(round.moleCount, round.currentRound)
+  const hitChance = getRoundHitChance(round.moleCount, round.currentRound, round.betAmount)
   const hit = Math.random() < hitChance
   const revealedHoles = createRevealHoles(round.moleCount, holeIndex, hit)
 

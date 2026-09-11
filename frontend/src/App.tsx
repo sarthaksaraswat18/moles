@@ -28,15 +28,6 @@ const MULTIPLIER_TABLE: Record<number, number[]> = {
   5: [1.27, 1.54, 1.96, 2.18, 3.96, 7.37],
   6: [1.03, 1.14, 1.27, 1.81, 2.11, 2.47],
 }
-const ROUND_CHANCE_TABLE: Record<number, number[]> = {
-  1: [0.0000001, 0.000000001, 0.0000000001, 0.000000000001, 0.00000000001, 0.0000000000000001],
-  2: [0.32, 0.25, 0.17, 0.1, 0.001, 0.00001],
-  3: [0.35, 0.2, 0.1, 0.001, 0.00008, 0.0001],
-  4: [0.57, 0.32, 0.2, 0.12, 0.05, 0.0001],
-  5: [0.8, 0.7, 0.57, 0.42, 0.3, 0.0001],
-  // Keep this in sync with `Backend/config/game-config.json` for offline fallback.
-  6: [0.92, 0.82, 0.67, 0.45, 0.3, 0.25],
-}
 const TOP_ROW_HOLES = [0, 1]
 const MIDDLE_ROW_HOLES = [2, 3, 4]
 const BOTTOM_ROW_HOLES = [5, 6]
@@ -238,10 +229,6 @@ function formatSats(amount: number): string {
 
 function formatMultiplier(value: number): string {
   return `${value.toFixed(2)}x`
-}
-
-function formatChance(value: number | null): string {
-  return value === null ? '--' : `${(value * 100).toFixed(2)}%`
 }
 
 function getOptionalString(value: unknown): string | null {
@@ -470,24 +457,6 @@ function isNumberTable(value: unknown): value is Record<number, number[]> {
   return Object.values(value).every(
     (row) => Array.isArray(row) && row.every((entry) => typeof entry === 'number'),
   )
-}
-
-function getRoundHitChance(
-  moleCount: number,
-  round: number,
-  roundChanceTable = ROUND_CHANCE_TABLE,
-): number {
-  const roundChances = roundChanceTable[moleCount]
-  if (!roundChances) {
-    throw new Error(`Unsupported mole count: ${moleCount}`)
-  }
-
-  const hitChance = roundChances[round - 1]
-  if (typeof hitChance !== 'number') {
-    throw new Error(`Unsupported round ${round} for mole count ${moleCount}`)
-  }
-
-  return hitChance
 }
 
 function getCumulativeMultiplier(
@@ -729,7 +698,6 @@ function App() {
   const [activeGame, setActiveGame] = useState<ActiveGame | null>(null)
   const [struckHole, setStruckHole] = useState<number | null>(null)
   const [multiplierTable, setMultiplierTable] = useState(MULTIPLIER_TABLE)
-  const [roundChanceTable, setRoundChanceTable] = useState(ROUND_CHANCE_TABLE)
   const [maxRounds, setMaxRounds] = useState(MAX_ROUNDS)
   const [holeCount, setHoleCount] = useState(HOLE_COUNT)
   const [paymentInfo, setPaymentInfo] = useState<PaymentInfo | null>(null)
@@ -748,6 +716,7 @@ function App() {
   const [isCashingOut, setIsCashingOut] = useState(false)
   const [showHistoryModal, setShowHistoryModal] = useState(false)
   const [showAddCashModal, setShowAddCashModal] = useState(false)
+  const [hasAcceptedDepositTerms, setHasAcceptedDepositTerms] = useState(false)
 
   const currentRound = activeGame?.round ?? 1
   const currentHitCount = activeGame?.hitCount ?? 0
@@ -756,10 +725,6 @@ function App() {
   const rawMultiplier = getCumulativeMultiplier(gameMoleCount, currentHitCount, multiplierTable)
   const currentMultiplier = activeGame?.stage === 'lost' ? 0 : rawMultiplier
   const currentPayout = activeGame?.stage === 'lost' ? 0 : Math.floor(gameBetAmount * currentMultiplier)
-  const nextRoundChance =
-    activeGame && (activeGame.stage === 'awaiting-pick' || activeGame.stage === 'revealing-hit')
-      ? getRoundHitChance(activeGame.moleCount, activeGame.round, roundChanceTable)
-      : null
   const isBusy = isDepositing || isWithdrawing || isStartingRound || isRevealing || isCashingOut
   const canPickHole = Boolean(activeGame && activeGame.stage === 'awaiting-pick' && !isBusy)
   const canAdjustControls = (!activeGame || activeGame.stage === 'setup') && !isBusy
@@ -1054,9 +1019,6 @@ function App() {
           setMultiplierTable(config.multiplierTable)
         }
 
-        if (isNumberTable(config.roundChanceTable)) {
-          setRoundChanceTable(config.roundChanceTable)
-        }
       } catch {
         // Keep the local fallback values if the backend is unavailable during boot.
       }
@@ -1563,10 +1525,6 @@ function App() {
                 <strong>{`${currentRound}/${maxRounds}`}</strong>
               </div>
               <div className="gameStat">
-                <span className="gameStatLabel">Win chance</span>
-                <strong>{formatChance(nextRoundChance)}</strong>
-              </div>
-              <div className="gameStat">
                 <span className="gameStatLabel">Multiplier</span>
                 <strong>{currentMultiplier > 0 ? formatMultiplier(currentMultiplier) : '—'}</strong>
               </div>
@@ -1768,12 +1726,38 @@ function App() {
           <div className="modal">
             <div className="modalHeader">
               <div className="modalTitle">Add Cash</div>
-              <button type="button" className="button secondary" onClick={() => setShowAddCashModal(false)}>
+              <button
+                type="button"
+                className="button secondary"
+                onClick={() => {
+                  setHasAcceptedDepositTerms(false)
+                  setShowAddCashModal(false)
+                }}
+              >
                 Close
               </button>
             </div>
 
             <div className="muted">Choose an amount to deposit. Your wallet balance will update after payment confirmation.</div>
+
+            <label className="legalConsentRow" htmlFor="legal-acceptance">
+              <input
+                id="legal-acceptance"
+                type="checkbox"
+                checked={hasAcceptedDepositTerms}
+                onChange={(event) => setHasAcceptedDepositTerms(event.target.checked)}
+              />
+              <span>
+                By Depositing I have read and accepted{' '}
+                <a href="/terms.html" target="_blank" rel="noopener noreferrer">
+                  T&amp;C
+                </a>{' '}
+                and{' '}
+                <a href="/privacy.html" target="_blank" rel="noopener noreferrer">
+                  Privacy Policy
+                </a>
+              </span>
+            </label>
 
             <div className="topUpGrid">
               {TOP_UP_OPTIONS.map((amount) => (
@@ -1785,7 +1769,7 @@ function App() {
                     setShowAddCashModal(false)
                     void requestDeposit(amount)
                   }}
-                  disabled={isDepositing}
+                  disabled={isDepositing || !hasAcceptedDepositTerms}
                 >
                   Add {formatSats(amount)}
                 </button>
