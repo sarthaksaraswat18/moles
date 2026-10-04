@@ -21,228 +21,275 @@ exports.appendHistory = appendHistory;
 const fs_1 = require("fs");
 const path_1 = require("path");
 const crypto_1 = require("crypto");
-const ledgerFilePath = process.env.LEDGER_FILE_PATH?.trim()
+const node_sqlite_1 = require("node:sqlite");
+const databasePath = process.env.LEDGER_DB_PATH?.trim()
+    ? (0, path_1.resolve)(process.env.LEDGER_DB_PATH)
+    : (0, path_1.resolve)(process.cwd(), 'data', 'ledger.db');
+const legacyLedgerPath = process.env.LEDGER_FILE_PATH?.trim()
     ? (0, path_1.resolve)(process.env.LEDGER_FILE_PATH)
     : (0, path_1.resolve)(process.cwd(), 'data', 'ledger.json');
+(0, fs_1.mkdirSync)((0, path_1.dirname)(databasePath), { recursive: true });
+const database = new node_sqlite_1.DatabaseSync(databasePath);
+database.exec(`
+  PRAGMA journal_mode = WAL;
+  PRAGMA foreign_keys = ON;
+  PRAGMA busy_timeout = 5000;
+
+  CREATE TABLE IF NOT EXISTS wallets (
+    account_id TEXT PRIMARY KEY,
+    lightning_address TEXT,
+    balance INTEGER NOT NULL DEFAULT 0,
+    hold_sats INTEGER NOT NULL DEFAULT 0,
+    pending_withdrawal_json TEXT,
+    last_known_speed_balance_sats REAL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS rounds (
+    id TEXT PRIMARY KEY,
+    player_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    data_json TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS rounds_account_stage_idx ON rounds(account_id, stage, updated_at DESC);
+  CREATE TABLE IF NOT EXISTS history (
+    id TEXT PRIMARY KEY,
+    player_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    data_json TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS history_account_created_idx ON history(account_id, created_at DESC);
+  CREATE TABLE IF NOT EXISTS transactions (
+    id TEXT PRIMARY KEY,
+    player_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    external_id TEXT,
+    kind TEXT NOT NULL,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    data_json TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS transactions_account_created_idx ON transactions(account_id, created_at DESC);
+  CREATE INDEX IF NOT EXISTS transactions_external_kind_idx ON transactions(external_id, kind);
+  CREATE TABLE IF NOT EXISTS processed_invoices (
+    invoice_id TEXT PRIMARY KEY,
+    purpose TEXT NOT NULL,
+    wallet_id TEXT,
+    amount_sats INTEGER NOT NULL,
+    processed_at TEXT NOT NULL
+  );
+`);
 function normalizeLightningAddress(lightningAddress) {
     const value = String(lightningAddress ?? '').trim().toLowerCase();
-    if (!value) {
+    if (!value)
         return null;
-    }
     return value.includes('@') ? value : `${value}@speed.app`;
 }
-function createEmptyLedger() {
+function parseJson(value) {
+    return JSON.parse(value);
+}
+function getWalletRow(accountId) {
+    return database.prepare('SELECT * FROM wallets WHERE account_id = ?').get(accountId);
+}
+function toWallet(row) {
     return {
-        wallets: {},
-        rounds: {},
-        history: [],
-        transactions: [],
-        processedInvoices: {},
+        playerId: String(row.account_id),
+        accountId: String(row.account_id),
+        lightningAddress: row.lightning_address ?? null,
+        balance: Number(row.balance) || 0,
+        holdSats: Math.max(0, Math.floor(Number(row.hold_sats) || 0)),
+        pendingWithdrawal: row.pending_withdrawal_json
+            ? parseJson(String(row.pending_withdrawal_json))
+            : null,
+        lastKnownSpeedBalanceSats: row.last_known_speed_balance_sats == null ? null : Number(row.last_known_speed_balance_sats),
+        createdAt: String(row.created_at),
+        updatedAt: String(row.updated_at),
     };
 }
-function normalizeWallet(wallet) {
-    return {
-        ...wallet,
-        holdSats: Math.max(0, Math.floor(Number(wallet.holdSats) || 0)),
-        pendingWithdrawal: wallet.pendingWithdrawal ?? null,
-    };
-}
-function loadLedger() {
-    try {
-        const raw = (0, fs_1.readFileSync)(ledgerFilePath, 'utf8');
-        const parsed = JSON.parse(raw);
-        return {
-            wallets: parsed.wallets ?? {},
-            rounds: parsed.rounds ?? {},
-            history: Array.isArray(parsed.history) ? parsed.history : [],
-            transactions: Array.isArray(parsed.transactions) ? parsed.transactions : [],
-            processedInvoices: parsed.processedInvoices ?? {},
-        };
-    }
-    catch (error) {
-        const fileError = error;
-        if (fileError.code === 'ENOENT') {
-            return createEmptyLedger();
-        }
-        console.warn(`Failed to load ledger from ${ledgerFilePath}. Starting with an empty store.`, error);
-        return createEmptyLedger();
-    }
-}
-function persistLedger() {
-    const payload = {
-        wallets: Object.fromEntries(wallets.entries()),
-        rounds: Object.fromEntries(rounds.entries()),
-        history,
-        transactions,
-        processedInvoices: Object.fromEntries(processedInvoices.entries()),
-    };
-    (0, fs_1.mkdirSync)((0, path_1.dirname)(ledgerFilePath), { recursive: true });
-    (0, fs_1.writeFileSync)(ledgerFilePath, JSON.stringify(payload, null, 2), 'utf8');
-}
-const persistedLedger = loadLedger();
-const wallets = new Map(Object.entries(persistedLedger.wallets).map(([accountId, wallet]) => [accountId, normalizeWallet(wallet)]));
-const rounds = new Map(Object.entries(persistedLedger.rounds));
-const history = persistedLedger.history;
-const transactions = persistedLedger.transactions;
-const processedInvoices = new Map(Object.entries(persistedLedger.processedInvoices ?? {}));
-function getOrCreateWallet(accountId, lightningAddress) {
-    const normalizedLightningAddress = normalizeLightningAddress(lightningAddress);
-    const existing = wallets.get(accountId);
-    if (existing) {
-        if (normalizedLightningAddress && existing.lightningAddress !== normalizedLightningAddress) {
-            existing.lightningAddress = normalizedLightningAddress;
-            existing.updatedAt = new Date().toISOString();
-            wallets.set(accountId, existing);
-            persistLedger();
-        }
-        return existing;
-    }
-    const now = new Date().toISOString();
-    const wallet = {
-        playerId: accountId,
-        accountId,
-        lightningAddress: normalizedLightningAddress,
-        balance: 0,
-        holdSats: 0,
-        pendingWithdrawal: null,
-        lastKnownSpeedBalanceSats: null,
-        createdAt: now,
-        updatedAt: now,
-    };
-    wallets.set(accountId, wallet);
-    persistLedger();
-    return wallet;
-}
-function syncWalletContext(context) {
-    const wallet = getOrCreateWallet(context.accountId, context.lightningAddress);
-    wallet.lightningAddress = normalizeLightningAddress(context.lightningAddress);
-    wallet.lastKnownSpeedBalanceSats = context.balanceBtc ?? wallet.lastKnownSpeedBalanceSats;
-    wallet.updatedAt = new Date().toISOString();
-    wallets.set(context.accountId, wallet);
-    persistLedger();
-    return wallet;
-}
-function bindWalletLightningAddress(accountId, lightningAddress) {
-    const wallet = getOrCreateWallet(accountId);
+function ensureWallet(accountId, lightningAddress) {
     const normalized = normalizeLightningAddress(lightningAddress);
-    if (!normalized) {
-        throw new Error('Lightning address is required');
-    }
-    if (!wallet.lightningAddress) {
-        wallet.lightningAddress = normalized;
-        wallet.updatedAt = new Date().toISOString();
-        wallets.set(accountId, wallet);
-        persistLedger();
+    const existingRow = getWalletRow(accountId);
+    if (existingRow) {
+        const wallet = toWallet(existingRow);
+        if (normalized && wallet.lightningAddress !== normalized) {
+            const updatedAt = new Date().toISOString();
+            database.prepare('UPDATE wallets SET lightning_address = ?, updated_at = ? WHERE account_id = ?')
+                .run(normalized, updatedAt, accountId);
+            return toWallet(getWalletRow(accountId));
+        }
         return wallet;
     }
-    const existing = wallet.lightningAddress.trim().toLowerCase();
-    const next = normalized;
-    if (existing !== next) {
+    const now = new Date().toISOString();
+    database.prepare(`
+    INSERT INTO wallets (account_id, lightning_address, balance, hold_sats, pending_withdrawal_json, last_known_speed_balance_sats, created_at, updated_at)
+    VALUES (?, ?, 0, 0, NULL, NULL, ?, ?)
+  `).run(accountId, normalized, now, now);
+    return toWallet(getWalletRow(accountId));
+}
+function importLegacyLedgerIfNeeded() {
+    const row = database.prepare('SELECT COUNT(*) AS count FROM wallets').get();
+    if (Number(row?.count ?? 0) > 0 || !(0, fs_1.existsSync)(legacyLedgerPath))
+        return;
+    let ledger;
+    try {
+        ledger = parseJson((0, fs_1.readFileSync)(legacyLedgerPath, 'utf8'));
+    }
+    catch (error) {
+        console.warn(`Unable to import legacy ledger from ${legacyLedgerPath}.`, error);
+        return;
+    }
+    database.exec('BEGIN');
+    try {
+        for (const [accountId, wallet] of Object.entries(ledger.wallets ?? {})) {
+            database.prepare(`
+        INSERT OR IGNORE INTO wallets (account_id, lightning_address, balance, hold_sats, pending_withdrawal_json, last_known_speed_balance_sats, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(accountId, normalizeLightningAddress(wallet.lightningAddress), Math.max(0, Math.floor(Number(wallet.balance) || 0)), Math.max(0, Math.floor(Number(wallet.holdSats) || 0)), wallet.pendingWithdrawal ? JSON.stringify(wallet.pendingWithdrawal) : null, wallet.lastKnownSpeedBalanceSats, wallet.createdAt, wallet.updatedAt);
+        }
+        for (const round of Object.values(ledger.rounds ?? {})) {
+            database.prepare(`INSERT OR IGNORE INTO rounds (id, player_id, account_id, stage, created_at, updated_at, data_json) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+                .run(round.id, round.playerId, round.accountId, round.stage, round.createdAt, round.updatedAt, JSON.stringify(round));
+        }
+        for (const entry of ledger.history ?? []) {
+            database.prepare(`INSERT OR IGNORE INTO history (id, player_id, account_id, created_at, data_json) VALUES (?, ?, ?, ?, ?)`)
+                .run(entry.id, entry.playerId, entry.accountId, entry.createdAt, JSON.stringify(entry));
+        }
+        for (const entry of ledger.transactions ?? []) {
+            database.prepare(`INSERT OR IGNORE INTO transactions (id, player_id, account_id, external_id, kind, status, created_at, data_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+                .run(entry.id, entry.playerId, entry.accountId, entry.externalId, entry.kind, entry.status, entry.createdAt, JSON.stringify(entry));
+        }
+        for (const [invoiceId, entry] of Object.entries(ledger.processedInvoices ?? {})) {
+            database.prepare(`INSERT OR IGNORE INTO processed_invoices (invoice_id, purpose, wallet_id, amount_sats, processed_at) VALUES (?, ?, ?, ?, ?)`)
+                .run(invoiceId, entry.purpose, entry.walletId, entry.amountSats, entry.processedAt);
+        }
+        database.exec('COMMIT');
+        console.log(`Imported legacy ledger into SQLite at ${databasePath}.`);
+    }
+    catch (error) {
+        database.exec('ROLLBACK');
+        throw error;
+    }
+}
+importLegacyLedgerIfNeeded();
+function getOrCreateWallet(accountId, lightningAddress) {
+    return ensureWallet(accountId, lightningAddress);
+}
+function syncWalletContext(context) {
+    const wallet = ensureWallet(context.accountId, context.lightningAddress);
+    database.prepare(`UPDATE wallets SET lightning_address = ?, last_known_speed_balance_sats = ?, updated_at = ? WHERE account_id = ?`)
+        .run(normalizeLightningAddress(context.lightningAddress), context.balanceBtc ?? wallet.lastKnownSpeedBalanceSats, new Date().toISOString(), context.accountId);
+    return ensureWallet(context.accountId);
+}
+function bindWalletLightningAddress(accountId, lightningAddress) {
+    const wallet = ensureWallet(accountId);
+    const normalized = normalizeLightningAddress(lightningAddress);
+    if (!normalized)
+        throw new Error('Lightning address is required');
+    if (wallet.lightningAddress && wallet.lightningAddress !== normalized) {
         throw new Error('This wallet is bound to a different lightning address');
     }
-    return wallet;
+    if (!wallet.lightningAddress) {
+        database.prepare('UPDATE wallets SET lightning_address = ?, updated_at = ? WHERE account_id = ?')
+            .run(normalized, new Date().toISOString(), accountId);
+    }
+    return ensureWallet(accountId);
 }
 function setWalletHold(accountId, holdSats) {
-    const wallet = getOrCreateWallet(accountId);
-    wallet.holdSats = Math.max(0, Math.floor(Number(holdSats) || 0));
-    wallet.updatedAt = new Date().toISOString();
-    wallets.set(accountId, wallet);
-    persistLedger();
-    return wallet;
+    ensureWallet(accountId);
+    database.prepare('UPDATE wallets SET hold_sats = ?, updated_at = ? WHERE account_id = ?')
+        .run(Math.max(0, Math.floor(Number(holdSats) || 0)), new Date().toISOString(), accountId);
+    return ensureWallet(accountId);
 }
 function setPendingWithdrawal(accountId, pendingWithdrawal) {
-    const wallet = getOrCreateWallet(accountId);
-    wallet.pendingWithdrawal = pendingWithdrawal;
-    wallet.updatedAt = new Date().toISOString();
-    wallets.set(accountId, wallet);
-    persistLedger();
-    return wallet;
+    ensureWallet(accountId);
+    database.prepare('UPDATE wallets SET pending_withdrawal_json = ?, updated_at = ? WHERE account_id = ?')
+        .run(pendingWithdrawal ? JSON.stringify(pendingWithdrawal) : null, new Date().toISOString(), accountId);
+    return ensureWallet(accountId);
 }
 function hasProcessedInvoice(invoiceId) {
-    return processedInvoices.has(invoiceId);
+    return Boolean(database.prepare('SELECT 1 FROM processed_invoices WHERE invoice_id = ?').get(invoiceId));
 }
 function creditProcessedTopUp(params) {
-    if (processedInvoices.has(params.invoiceId)) {
-        const existingWallet = getOrCreateWallet(params.accountId);
-        return { credited: false, wallet: existingWallet, balanceBefore: existingWallet.balance, balanceAfter: existingWallet.balance };
+    database.exec('BEGIN IMMEDIATE');
+    try {
+        if (hasProcessedInvoice(params.invoiceId)) {
+            database.exec('COMMIT');
+            const wallet = ensureWallet(params.accountId);
+            return { credited: false, wallet, balanceBefore: wallet.balance, balanceAfter: wallet.balance };
+        }
+        const wallet = ensureWallet(params.accountId);
+        const balanceBefore = wallet.balance;
+        const balanceAfter = balanceBefore + Math.floor(params.amountSats);
+        const now = new Date().toISOString();
+        database.prepare('UPDATE wallets SET balance = ?, updated_at = ? WHERE account_id = ?').run(balanceAfter, now, params.accountId);
+        database.prepare(`INSERT INTO processed_invoices (invoice_id, purpose, wallet_id, amount_sats, processed_at) VALUES (?, 'topup', ?, ?, ?)`)
+            .run(params.invoiceId, params.accountId, Math.floor(params.amountSats), now);
+        database.exec('COMMIT');
+        return { credited: true, wallet: ensureWallet(params.accountId), balanceBefore, balanceAfter };
     }
-    const wallet = getOrCreateWallet(params.accountId);
-    const balanceBefore = wallet.balance;
-    const nextBalance = wallet.balance + params.amountSats;
-    wallet.balance = nextBalance;
-    wallet.updatedAt = new Date().toISOString();
-    wallets.set(params.accountId, wallet);
-    processedInvoices.set(params.invoiceId, {
-        purpose: 'topup',
-        walletId: params.accountId,
-        amountSats: params.amountSats,
-        processedAt: new Date().toISOString(),
-    });
-    persistLedger();
-    return { credited: true, wallet, balanceBefore, balanceAfter: wallet.balance };
+    catch (error) {
+        database.exec('ROLLBACK');
+        throw error;
+    }
 }
 function updateWalletBalance(accountId, nextBalance) {
-    const wallet = getOrCreateWallet(accountId);
-    wallet.balance = Math.max(0, Math.floor(Number(nextBalance) || 0));
-    wallet.updatedAt = new Date().toISOString();
-    wallets.set(accountId, wallet);
-    persistLedger();
-    return wallet;
+    ensureWallet(accountId);
+    database.prepare('UPDATE wallets SET balance = ?, updated_at = ? WHERE account_id = ?')
+        .run(Math.max(0, Math.floor(Number(nextBalance) || 0)), new Date().toISOString(), accountId);
+    return ensureWallet(accountId);
 }
 function saveRound(round) {
     round.updatedAt = new Date().toISOString();
-    rounds.set(round.id, round);
-    persistLedger();
+    database.prepare(`
+    INSERT INTO rounds (id, player_id, account_id, stage, created_at, updated_at, data_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET player_id = excluded.player_id, account_id = excluded.account_id, stage = excluded.stage, updated_at = excluded.updated_at, data_json = excluded.data_json
+  `).run(round.id, round.playerId, round.accountId, round.stage, round.createdAt, round.updatedAt, JSON.stringify(round));
     return round;
 }
-function createRoundId() {
-    return (0, crypto_1.randomUUID)();
-}
-function createTransactionId() {
-    return (0, crypto_1.randomUUID)();
-}
+function createRoundId() { return (0, crypto_1.randomUUID)(); }
+function createTransactionId() { return (0, crypto_1.randomUUID)(); }
 function getRound(roundId) {
-    return rounds.get(roundId);
+    const row = database.prepare('SELECT data_json FROM rounds WHERE id = ?').get(roundId);
+    return row?.data_json ? parseJson(row.data_json) : undefined;
 }
 function getLatestActiveRound(accountId) {
-    const activeRounds = Array.from(rounds.values())
-        .filter((round) => round.accountId === accountId && round.stage === 'awaiting-pick')
-        .sort((left, right) => (left.updatedAt < right.updatedAt ? 1 : -1));
-    return activeRounds[0] ?? null;
+    const row = database.prepare(`SELECT data_json FROM rounds WHERE account_id = ? AND stage = 'awaiting-pick' ORDER BY updated_at DESC LIMIT 1`).get(accountId);
+    return row?.data_json ? parseJson(row.data_json) : null;
 }
 function listTransactions(accountId) {
-    return transactions
-        .filter((entry) => (accountId ? entry.accountId === accountId : true))
-        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+    const rows = accountId
+        ? database.prepare('SELECT data_json FROM transactions WHERE account_id = ? ORDER BY created_at DESC').all(accountId)
+        : database.prepare('SELECT data_json FROM transactions ORDER BY created_at DESC').all();
+    return rows.map((row) => parseJson(row.data_json));
 }
 function appendTransaction(entry) {
-    const transaction = {
-        id: createTransactionId(),
-        createdAt: new Date().toISOString(),
-        ...entry,
-    };
-    transactions.unshift(transaction);
-    persistLedger();
+    const transaction = { id: createTransactionId(), createdAt: new Date().toISOString(), ...entry };
+    database.prepare(`INSERT INTO transactions (id, player_id, account_id, external_id, kind, status, created_at, data_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(transaction.id, transaction.playerId, transaction.accountId, transaction.externalId, transaction.kind, transaction.status, transaction.createdAt, JSON.stringify(transaction));
     return transaction;
 }
 function updateTransactionStatus(externalId, kind, status) {
-    const transaction = transactions.find((entry) => entry.externalId === externalId && entry.kind === kind);
-    if (!transaction) {
+    const row = database.prepare(`SELECT id, data_json FROM transactions WHERE external_id = ? AND kind = ? ORDER BY created_at ASC LIMIT 1`).get(externalId, kind);
+    if (!row?.id || !row.data_json)
         return undefined;
-    }
+    const transaction = parseJson(row.data_json);
     transaction.status = status;
-    persistLedger();
+    database.prepare('UPDATE transactions SET status = ?, data_json = ? WHERE id = ?').run(status, JSON.stringify(transaction), row.id);
     return transaction;
 }
 function listHistory(playerId) {
-    return history
-        .filter((entry) => (playerId ? entry.playerId === playerId : true))
-        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+    const rows = playerId
+        ? database.prepare('SELECT data_json FROM history WHERE player_id = ? ORDER BY created_at DESC').all(playerId)
+        : database.prepare('SELECT data_json FROM history ORDER BY created_at DESC').all();
+    return rows.map((row) => parseJson(row.data_json));
 }
 function appendHistory(round, result, multiplier, payout, balanceBefore, balanceAfter) {
-    const wallet = getOrCreateWallet(round.accountId);
-    const before = typeof balanceBefore === 'number' ? balanceBefore : wallet.balance;
-    const after = typeof balanceAfter === 'number' ? balanceAfter : wallet.balance;
+    const wallet = ensureWallet(round.accountId);
     const entry = {
         id: (0, crypto_1.randomUUID)(),
         playerId: round.playerId,
@@ -254,12 +301,12 @@ function appendHistory(round, result, multiplier, payout, balanceBefore, balance
         roundReached: round.hitCount,
         multiplier,
         payout,
-        balanceBefore: before,
-        balanceAfter: after,
+        balanceBefore: typeof balanceBefore === 'number' ? balanceBefore : wallet.balance,
+        balanceAfter: typeof balanceAfter === 'number' ? balanceAfter : wallet.balance,
         lightningAddress: wallet.lightningAddress ?? null,
         createdAt: new Date().toISOString(),
     };
-    history.unshift(entry);
-    persistLedger();
+    database.prepare('INSERT INTO history (id, player_id, account_id, created_at, data_json) VALUES (?, ?, ?, ?, ?)')
+        .run(entry.id, entry.playerId, entry.accountId, entry.createdAt, JSON.stringify(entry));
     return entry;
 }

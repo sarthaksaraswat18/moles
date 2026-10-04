@@ -16,8 +16,8 @@ const HOLE_COUNT = 7
 const MAX_ROUNDS = 6
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:4000'
 const DEFAULT_BET = 20
-const TOP_UP_OPTIONS = [100, 1000, 5000, 10000]
-const DEFAULT_MOLES = 3
+const TOP_UP_OPTIONS = [1000, 5000, 10000]
+const DEFAULT_MOLES = 6
 const LOCAL_DEV_ACCOUNT_STORAGE_KEY = 'moles-speed-local-account'
 const LOCALHOST_HOSTS = new Set(['localhost', '127.0.0.1'])
 const MULTIPLIER_TABLE: Record<number, number[]> = {
@@ -553,11 +553,13 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
 
   let response: Response
   try {
+    const contextLightningAddress = readLightningAddressFromLocation()
     response = await fetch(requestUrl, {
       cache: 'no-store',
       ...init,
       headers: {
         'content-type': 'application/json',
+        ...(contextLightningAddress ? { 'X-Speed-Lightning-Address': contextLightningAddress } : {}),
         ...(init?.headers ?? {}),
       },
     })
@@ -1126,6 +1128,7 @@ function App() {
       const response = await fetchJson<RoundMutationResponse>('/api/game/reveal', {
         method: 'POST',
         body: JSON.stringify({
+          accountId: bootstrapContext.accountId,
           roundId: activeGame.id,
           holeIndex,
         }),
@@ -1175,6 +1178,7 @@ function App() {
       const response = await fetchJson<RoundMutationResponse>('/api/game/cashout', {
         method: 'POST',
         body: JSON.stringify({
+          accountId: bootstrapContext.accountId,
           roundId: activeGame.id,
         }),
       })
@@ -1202,8 +1206,8 @@ function App() {
   }
 
   async function requestDeposit(amount: number) {
-    if (amount <= 0) {
-      setFlashMessage('Deposit amount must be greater than 0.')
+    if (amount < 1000) {
+      setFlashMessage('Minimum deposit amount is 1,000 sats.')
       return
     }
 

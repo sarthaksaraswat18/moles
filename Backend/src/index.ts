@@ -2,16 +2,16 @@ import cors from 'cors'
 import dotenv from 'dotenv'
 import express from 'express'
 import cron from 'node-cron'
+import rateLimit from 'express-rate-limit'
+import helmet from 'helmet'
 
 import {
   createRevealHoles,
-  getBetSizeChanceTables,
   getHoleCount,
   getMaxRounds,
   getMultiplier,
   getMultiplierTable,
   getRoundHitChance,
-  getRoundChanceTable,
 } from './game'
 import { buildSpeedWalletPrompt, createSpeedDepositPayment, createSpeedInstantSend, formatLightningAddress, isLightningAddress, verifyInvoicePaidWithSpeed } from './speed'
 import {
@@ -37,22 +37,27 @@ import { DepositRequest, GameRound, SpeedContext, SpeedWebhookPayload } from './
 dotenv.config()
 
 const app = express()
+app.set('trust proxy', 1)
 const port = Number(process.env.PORT ?? 4000)
 const keepaliveTimeoutMs = Number(process.env.KEEPALIVE_TIMEOUT_MS ?? 10000)
 const keepaliveIntervalMinutes = Number(process.env.KEEPALIVE_INTERVAL_MINUTES ?? 5)
+const speedWebhookSecret = process.env.SPEED_WEBHOOK_SECRET?.trim() ?? ''
+const isProduction = process.env.NODE_ENV === 'production'
 const keepaliveUrls = [
   ...(process.env.KEEPALIVE_URL ? process.env.KEEPALIVE_URL.split(',').map((value) => value.trim()).filter(Boolean) : []),
   `http://localhost:${port}/api/health`,
 ].filter((value, index, array) => array.indexOf(value) === index)
 
-const defaultAllowedOrigins = [
-  'http://localhost:4173',
-  'http://127.0.0.1:4173',
-  'http://localhost:5173',
-  'http://127.0.0.1:5173',
-  'http://localhost:5174',
-  'http://127.0.0.1:5174',
-]
+const defaultAllowedOrigins = isProduction
+  ? []
+  : [
+      'http://localhost:4173',
+      'http://127.0.0.1:4173',
+      'http://localhost:5173',
+      'http://127.0.0.1:5173',
+      'http://localhost:5174',
+      'http://127.0.0.1:5174',
+    ]
 const configuredAllowedOrigins = process.env.FRONTEND_ORIGIN
   ? process.env.FRONTEND_ORIGIN.split(',').map((origin) => origin.trim()).filter(Boolean)
   : []
@@ -70,9 +75,8 @@ function isAllowedOrigin(origin?: string | null): boolean {
   try {
     const { hostname, protocol } = new URL(origin)
     const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1'
-    const isVercelPreview = hostname.endsWith('.vercel.app')
 
-    return (protocol === 'http:' && isLocalhost) || (protocol === 'https:' && isVercelPreview)
+    return !isProduction && protocol === 'http:' && isLocalhost
   } catch {
     return false
   }
@@ -84,10 +88,50 @@ app.use(
       callback(null, isAllowedOrigin(origin))
     },
     methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Speed-Lightning-Address'],
   }),
 )
-app.use(express.json())
+app.use('/api', (_request, response, next) => {
+  response.set('Cache-Control', 'no-store')
+  next()
+})
+app.use(helmet())
+app.use(express.json({ limit: '32kb' }))
+app.use(
+  rateLimit({
+    windowMs: 60 * 1000,
+    limit: 120,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: { error: 'Too many requests. Please try again shortly.' },
+  }),
+)
+
+function getRequestLightningAddress(request: express.Request): string | null {
+  return getOptionalLightningAddress(
+    request.get('x-speed-lightning-address') ??
+      request.body?.lightningAddress ??
+      request.body?.p_add ??
+      request.query.lightningAddress ??
+      request.query.p_add,
+  )
+}
+
+app.use('/api', (request, response, next) => {
+  if (!isProduction || request.path === '/health' || request.path === '/game/config' || request.path === '/webhooks/speed/payments') {
+    next()
+    return
+  }
+
+  const requestedAccountId = getAccountId(request.body?.accountId ?? request.query.accountId ?? request.query.playerId)
+  const lightningAddress = getRequestLightningAddress(request)
+  if (!requestedAccountId || !lightningAddress) {
+    response.status(401).json(badRequest('Authenticated Speed Wallet account required.'))
+    return
+  }
+
+  next()
+})
 
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff')
@@ -245,8 +289,6 @@ app.get('/api/game/config', (_request, response) => {
     holeCount: getHoleCount(),
     maxRounds: getMaxRounds(),
     multiplierTable: getMultiplierTable(),
-    roundChanceTable: getRoundChanceTable(),
-    betSizeChanceTables: getBetSizeChanceTables(),
   })
 })
 
@@ -305,8 +347,8 @@ app.post('/api/wallet/deposit-request', async (request, response) => {
     return
   }
 
-  if (typeof payload.amount !== 'number' || payload.amount <= 0) {
-    response.status(400).json(badRequest('Amount must be a number greater than 0.'))
+  if (typeof payload.amount !== 'number' || !Number.isFinite(payload.amount) || payload.amount < 1000) {
+    response.status(400).json(badRequest('Amount must be a number of at least 1,000 sats.'))
     return
   }
 
@@ -459,6 +501,11 @@ app.get('/api/wallet/verify/:invoiceId', async (request, response) => {
 })
 
 app.post('/api/webhooks/speed/payments', (request, response) => {
+  if (!speedWebhookSecret || request.get('x-speed-webhook-secret') !== speedWebhookSecret) {
+    response.status(401).json(badRequest('Webhook authentication failed.'))
+    return
+  }
+
   const webhookObject = getWebhookObject(request.body as SpeedWebhookPayload)
   const paymentId = getOptionalString(webhookObject.id)
   const status = getOptionalString(webhookObject.status)
@@ -555,6 +602,7 @@ app.post('/api/game/rounds', (request, response) => {
     return
   }
 
+  const firstBet = !listTransactions(accountId).some((transaction) => transaction.kind === 'bet_placed')
   updateWalletBalance(accountId, wallet.balance - betAmount)
 
   const round: GameRound = {
@@ -563,6 +611,7 @@ app.post('/api/game/rounds', (request, response) => {
     accountId,
     betAmount,
     moleCount,
+    firstBet,
     stage: 'awaiting-pick',
     currentRound: 1,
     hitCount: 0,
@@ -602,9 +651,17 @@ app.post('/api/game/rounds', (request, response) => {
 })
 
 app.post('/api/game/reveal', (request, response) => {
-  const { roundId, holeIndex } = request.body as {
+  const { accountId: rawAccountId, roundId, holeIndex } = request.body as {
+    accountId?: unknown
     roundId?: unknown
     holeIndex?: unknown
+  }
+
+  const accountId = getAccountId(rawAccountId)
+
+  if (!accountId) {
+    response.status(400).json(badRequest('Speed Wallet account ID is required.'))
+    return
   }
 
   if (typeof roundId !== 'string' || roundId.trim().length === 0) {
@@ -623,13 +680,24 @@ app.post('/api/game/reveal', (request, response) => {
     return
   }
 
+  if (round.accountId !== accountId) {
+    response.status(403).json(badRequest('This round belongs to a different wallet.'))
+    return
+  }
+
   if (round.stage !== 'awaiting-pick') {
     response.status(400).json(badRequest('This round is not waiting for a pick.'))
     return
   }
 
   const hitChance = getRoundHitChance(round.moleCount, round.currentRound, round.betAmount)
-  const hit = Math.random() < hitChance
+  const firstBetHitGuaranteed = round.firstBet === true
+    && round.currentRound === 1
+    && (round.moleCount === 6
+      || round.moleCount === 5
+      || (round.moleCount === 4 && round.betAmount < 700)
+      || (round.moleCount === 3 && round.betAmount < 300))
+  const hit = firstBetHitGuaranteed || Math.random() < hitChance
   const revealedHoles = createRevealHoles(round.moleCount, holeIndex, hit)
 
   round.revealedHistory.push({
@@ -727,8 +795,16 @@ app.post('/api/game/reveal', (request, response) => {
 })
 
 app.post('/api/game/cashout', (request, response) => {
-  const { roundId } = request.body as {
+  const { accountId: rawAccountId, roundId } = request.body as {
+    accountId?: unknown
     roundId?: unknown
+  }
+
+  const accountId = getAccountId(rawAccountId)
+
+  if (!accountId) {
+    response.status(400).json(badRequest('Speed Wallet account ID is required.'))
+    return
   }
 
   if (typeof roundId !== 'string' || roundId.trim().length === 0) {
@@ -739,6 +815,11 @@ app.post('/api/game/cashout', (request, response) => {
   const round = getRound(roundId)
   if (!round) {
     response.status(404).json(badRequest('Round not found.'))
+    return
+  }
+
+  if (round.accountId !== accountId) {
+    response.status(403).json(badRequest('This round belongs to a different wallet.'))
     return
   }
 
@@ -784,10 +865,15 @@ app.post('/api/game/cashout', (request, response) => {
 app.get('/api/game/history', (request, response) => {
   const accountId = getAccountId(request.query.accountId ?? request.query.playerId)
 
+  if (!accountId) {
+    response.status(400).json(badRequest('Speed Wallet account ID is required.'))
+    return
+  }
+
   response.json({
-    wallet: accountId ? getOrCreateWallet(accountId) : null,
-    rounds: listHistory(accountId ?? undefined),
-    transactions: listTransactions(accountId ?? undefined),
+    wallet: getOrCreateWallet(accountId),
+    rounds: listHistory(accountId),
+    transactions: listTransactions(accountId),
   })
 })
 

@@ -13,11 +13,12 @@ This is the `Node + TypeScript + Express` backend for the Moles mini-app, built 
 Copy `.env.example` to `.env` and add your `Speed` secret API key.
 
 - `SPEED_SECRET_KEY` is required for creating deposits and withdrawals
+- `SPEED_WEBHOOK_SECRET` is required and must match the `x-speed-webhook-secret` header sent to the webhook endpoint
 - Use a `sk_test...` key while building against Speed test mode
 - `FRONTEND_ORIGIN` should match your mini-app frontend host
-- `LEDGER_FILE_PATH` controls where the local game ledger is stored. The default is `./data/ledger.json`
+- `LEDGER_DB_PATH` controls the SQLite database location. The default is `./data/ledger.db`
 
-For deposits to settle into the in-game balance, Speed must be able to reach your webhook endpoint at `POST /api/webhooks/speed/payments`. During local development, expose the backend with a tunnel and register that public URL in your Speed dashboard.
+For deposits to settle into the in-game balance, Speed must be able to reach your webhook endpoint at `POST /api/webhooks/speed/payments`, including the configured webhook secret header. During local development, expose the backend with a tunnel and register that public URL in your Speed dashboard.
 
 ## Endpoints
 
@@ -32,6 +33,8 @@ For deposits to settle into the in-game balance, Speed must be able to reach you
 - `GET /api/game/history`
 - `POST /api/wallet/withdraw`
 - `POST /api/payouts`
+
+The public game config deliberately returns multipliers but not server-side chance tables. History requires an account ID, and reveal/cashout requests require the account ID that owns the round.
 
 ## Speed Wallet Flow
 
@@ -61,4 +64,6 @@ For deposits to settle into the in-game balance, Speed must be able to reach you
 - Edit `config/game-config.json` to change the multiplier and round chance tables. The backend reloads that file automatically on the next request, even when running the compiled `dist` server.
 - Wallets, rounds, payout history, and Speed transaction records are now persisted to `LEDGER_FILE_PATH`, so balances survive backend restarts
 - Deposits and withdrawals now depend on real Speed API credentials
-- For production, you should persist wallets, rounds, payouts, and webhook events in a database
+- Rate limiting, request-size limits, security headers, explicit production CORS, and webhook authentication are enabled
+- Wallets, rounds, payouts, and webhook events are persisted in SQLite with WAL mode and transactional invoice crediting. Configure backups for the database file and its WAL companion.
+- Production account routes require the automatically supplied Speed account ID and locked Lightning address. Players do not enter either value; the mini-app reads them from the Speed context.

@@ -57,6 +57,7 @@ export interface GameRound {
   accountId: string
   betAmount: number
   moleCount: number
+  firstBet?: boolean
   stage: RoundStage
   currentRound: number
   hitCount: number
