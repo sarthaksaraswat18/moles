@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getOrCreateWallet = getOrCreateWallet;
+exports.closeStore = closeStore;
 exports.syncWalletContext = syncWalletContext;
 exports.bindWalletLightningAddress = bindWalletLightningAddress;
 exports.setWalletHold = setWalletHold;
@@ -8,6 +9,8 @@ exports.setPendingWithdrawal = setPendingWithdrawal;
 exports.hasProcessedInvoice = hasProcessedInvoice;
 exports.creditProcessedTopUp = creditProcessedTopUp;
 exports.updateWalletBalance = updateWalletBalance;
+exports.placeBet = placeBet;
+exports.rollbackFailedWithdrawal = rollbackFailedWithdrawal;
 exports.saveRound = saveRound;
 exports.createRoundId = createRoundId;
 exports.createTransactionId = createTransactionId;
@@ -178,6 +181,9 @@ importLegacyLedgerIfNeeded();
 function getOrCreateWallet(accountId, lightningAddress) {
     return ensureWallet(accountId, lightningAddress);
 }
+function closeStore() {
+    database.close();
+}
 function syncWalletContext(context) {
     const wallet = ensureWallet(context.accountId, context.lightningAddress);
     database.prepare(`UPDATE wallets SET lightning_address = ?, last_known_speed_balance_sats = ?, updated_at = ? WHERE account_id = ?`)
@@ -241,6 +247,80 @@ function updateWalletBalance(accountId, nextBalance) {
     database.prepare('UPDATE wallets SET balance = ?, updated_at = ? WHERE account_id = ?')
         .run(Math.max(0, Math.floor(Number(nextBalance) || 0)), new Date().toISOString(), accountId);
     return ensureWallet(accountId);
+}
+function placeBet(round) {
+    database.exec('BEGIN IMMEDIATE');
+    try {
+        const wallet = ensureWallet(round.accountId);
+        const activeRound = database.prepare(`SELECT 1 FROM rounds WHERE account_id = ? AND stage = 'awaiting-pick' LIMIT 1`)
+            .get(round.accountId);
+        if (activeRound) {
+            database.exec('COMMIT');
+            return { ok: false, reason: 'active-round', wallet };
+        }
+        if (wallet.balance < round.betAmount) {
+            database.exec('COMMIT');
+            return { ok: false, reason: 'insufficient-balance', wallet };
+        }
+        const existingBet = database.prepare(`SELECT 1 FROM transactions WHERE account_id = ? AND kind = 'bet_placed' LIMIT 1`)
+            .get(round.accountId);
+        round.firstBet = !existingBet;
+        const balanceAfter = wallet.balance - round.betAmount;
+        database.prepare('UPDATE wallets SET balance = ?, updated_at = ? WHERE account_id = ?')
+            .run(balanceAfter, new Date().toISOString(), round.accountId);
+        saveRound(round);
+        appendTransaction({
+            playerId: round.playerId,
+            accountId: round.accountId,
+            roundId: round.id,
+            externalId: null,
+            kind: 'bet_placed',
+            direction: 'debit',
+            status: 'completed',
+            amount: round.betAmount,
+            currency: 'SATS',
+            provider: 'internal',
+            note: 'Bet locked from game balance',
+            metadata: { moleCount: round.moleCount },
+            balanceBefore: wallet.balance,
+            balanceAfter,
+            lightningAddress: wallet.lightningAddress ?? null,
+        });
+        database.exec('COMMIT');
+        return { ok: true, round, wallet: ensureWallet(round.accountId) };
+    }
+    catch (error) {
+        database.exec('ROLLBACK');
+        throw error;
+    }
+}
+function rollbackFailedWithdrawal(accountId, amountSats, transactionId) {
+    database.exec('BEGIN IMMEDIATE');
+    try {
+        const wallet = ensureWallet(accountId);
+        const nextBalance = wallet.balance + amountSats;
+        database.prepare(`
+      UPDATE wallets
+      SET balance = ?, hold_sats = 0, pending_withdrawal_json = NULL, updated_at = ?
+      WHERE account_id = ?
+    `).run(nextBalance, new Date().toISOString(), accountId);
+        const row = database.prepare('SELECT data_json FROM transactions WHERE id = ? AND account_id = ?')
+            .get(transactionId, accountId);
+        if (!row?.data_json) {
+            throw new Error('Pending withdrawal transaction was not found.');
+        }
+        const transaction = parseJson(row.data_json);
+        transaction.status = 'failed';
+        transaction.note = 'Speed Wallet withdrawal failed; reserved sats returned to balance';
+        database.prepare('UPDATE transactions SET status = ?, data_json = ? WHERE id = ?')
+            .run('failed', JSON.stringify(transaction), transactionId);
+        database.exec('COMMIT');
+        return ensureWallet(accountId);
+    }
+    catch (error) {
+        database.exec('ROLLBACK');
+        throw error;
+    }
 }
 function saveRound(round) {
     round.updatedAt = new Date().toISOString();

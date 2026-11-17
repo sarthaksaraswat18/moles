@@ -59,7 +59,7 @@ app.use((0, cors_1.default)({
         callback(null, isAllowedOrigin(origin));
     },
     methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Speed-Lightning-Address'],
+    allowedHeaders: ['Content-Type', 'X-Speed-Lightning-Address'],
 }));
 app.use('/api', (_request, response, next) => {
     response.set('Cache-Control', 'no-store');
@@ -266,7 +266,7 @@ app.post('/api/wallet/deposit-request', async (request, response) => {
         response.status(400).json(badRequest('Speed Wallet account ID is required.'));
         return;
     }
-    if (typeof payload.amount !== 'number' || !Number.isFinite(payload.amount) || payload.amount < 1000) {
+    if (typeof payload.amount !== 'number' || !Number.isSafeInteger(payload.amount) || payload.amount < 1000) {
         response.status(400).json(badRequest('Amount must be a number of at least 1,000 sats.'));
         return;
     }
@@ -466,28 +466,21 @@ app.post('/api/game/rounds', (request, response) => {
         response.status(400).json(badRequest('Speed Wallet account ID is required.'));
         return;
     }
-    if (typeof betAmount !== 'number' || betAmount <= 0) {
-        response.status(400).json(badRequest('Bet amount must be a number greater than 0.'));
+    if (typeof betAmount !== 'number' || !Number.isSafeInteger(betAmount) || betAmount <= 0) {
+        response.status(400).json(badRequest('Bet amount must be a positive whole number of sats.'));
         return;
     }
-    if (typeof moleCount !== 'number' || moleCount < 1 || moleCount > 6) {
+    if (typeof moleCount !== 'number' || !Number.isInteger(moleCount) || moleCount < 1 || moleCount > 6) {
         response.status(400).json(badRequest('Mole count must be between 1 and 6.'));
         return;
     }
     const wallet = (0, store_1.getOrCreateWallet)(accountId, getOptionalLightningAddress(lightningAddress));
-    if (wallet.balance < betAmount) {
-        response.status(400).json(badRequest('Insufficient balance for this round.'));
-        return;
-    }
-    const firstBet = !(0, store_1.listTransactions)(accountId).some((transaction) => transaction.kind === 'bet_placed');
-    (0, store_1.updateWalletBalance)(accountId, wallet.balance - betAmount);
     const round = {
         id: (0, store_1.createRoundId)(),
         playerId: accountId,
         accountId,
         betAmount,
         moleCount,
-        firstBet,
         stage: 'awaiting-pick',
         currentRound: 1,
         hitCount: 0,
@@ -498,29 +491,18 @@ app.post('/api/game/rounds', (request, response) => {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
     };
-    (0, store_1.saveRound)(round);
-    (0, store_1.appendTransaction)({
-        playerId: accountId,
-        accountId,
-        roundId: round.id,
-        externalId: null,
-        kind: 'bet_placed',
-        direction: 'debit',
-        status: 'completed',
-        amount: betAmount,
-        currency: 'SATS',
-        provider: 'internal',
-        note: 'Bet locked from game balance',
-        metadata: {
-            moleCount,
-        },
-        balanceBefore: wallet.balance,
-        balanceAfter: Math.max(0, wallet.balance - betAmount),
-        lightningAddress: wallet.lightningAddress ?? null,
-    });
+    const placement = (0, store_1.placeBet)(round);
+    if (!placement.ok) {
+        const status = placement.reason === 'active-round' ? 409 : 400;
+        const message = placement.reason === 'active-round'
+            ? 'Finish or recover your active round before placing another bet.'
+            : 'Insufficient balance for this round.';
+        response.status(status).json(badRequest(message));
+        return;
+    }
     response.status(201).json({
-        walletBalance: (0, store_1.getOrCreateWallet)(accountId).balance,
-        round: getPublicRoundState(round),
+        walletBalance: placement.wallet.balance,
+        round: getPublicRoundState(placement.round),
     });
 });
 app.post('/api/game/reveal', (request, response) => {
@@ -750,8 +732,8 @@ async function handleWithdraw(request, response) {
         return;
     }
     const withdrawAmount = getOptionalNumber(amount) ?? wallet.balance;
-    if (!withdrawAmount || withdrawAmount <= 0) {
-        response.status(400).json(badRequest('Withdrawal amount must be greater than 0.'));
+    if (!withdrawAmount || !Number.isSafeInteger(withdrawAmount) || withdrawAmount <= 0) {
+        response.status(400).json(badRequest('Withdrawal amount must be a positive whole number of sats.'));
         return;
     }
     if (wallet.balance < withdrawAmount) {
@@ -767,7 +749,7 @@ async function handleWithdraw(request, response) {
         requestedAt: new Date().toISOString(),
         reason: 'manual_withdraw',
     });
-    (0, store_1.appendTransaction)({
+    const pendingWithdrawalTransaction = (0, store_1.appendTransaction)({
         playerId: accountId,
         accountId,
         roundId: null,
@@ -823,9 +805,7 @@ async function handleWithdraw(request, response) {
         });
     }
     catch (error) {
-        (0, store_1.updateWalletBalance)(accountId, balanceBefore);
-        (0, store_1.setWalletHold)(accountId, 0);
-        (0, store_1.setPendingWithdrawal)(accountId, null);
+        (0, store_1.rollbackFailedWithdrawal)(accountId, withdrawAmount, pendingWithdrawalTransaction.id);
         response.status(502).json(badRequest(error instanceof Error ? error.message : 'Unable to create Speed payout.'));
     }
 }

@@ -6,6 +6,7 @@ This is the `Node + TypeScript + Express` backend for the Moles mini-app, built 
 
 - `npm run dev` starts the API in watch mode
 - `npm run build` compiles TypeScript to `dist`
+- `npm test` runs backend ledger transaction tests
 - `npm run start` runs the compiled server
 
 ## Environment
@@ -66,4 +67,4 @@ The public game config deliberately returns multipliers but not server-side chan
 - Deposits and withdrawals now depend on real Speed API credentials
 - Rate limiting, request-size limits, security headers, explicit production CORS, and webhook authentication are enabled
 - Wallets, rounds, payouts, and webhook events are persisted in SQLite with WAL mode and transactional invoice crediting. Configure backups for the database file and its WAL companion.
-- Production account routes require the automatically supplied Speed account ID and locked Lightning address. Players do not enter either value; the mini-app reads them from the Speed context.
+- Production account routes require the Speed account ID and Lightning address to be present in the Speed Wallet context.

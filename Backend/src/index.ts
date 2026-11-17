@@ -25,6 +25,8 @@ import {
   getRound,
   listHistory,
   listTransactions,
+  placeBet,
+  rollbackFailedWithdrawal,
   saveRound,
   setPendingWithdrawal,
   setWalletHold,
@@ -88,7 +90,7 @@ app.use(
       callback(null, isAllowedOrigin(origin))
     },
     methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Speed-Lightning-Address'],
+    allowedHeaders: ['Content-Type', 'X-Speed-Lightning-Address'],
   }),
 )
 app.use('/api', (_request, response, next) => {
@@ -347,7 +349,7 @@ app.post('/api/wallet/deposit-request', async (request, response) => {
     return
   }
 
-  if (typeof payload.amount !== 'number' || !Number.isFinite(payload.amount) || payload.amount < 1000) {
+  if (typeof payload.amount !== 'number' || !Number.isSafeInteger(payload.amount) || payload.amount < 1000) {
     response.status(400).json(badRequest('Amount must be a number of at least 1,000 sats.'))
     return
   }
@@ -586,24 +588,17 @@ app.post('/api/game/rounds', (request, response) => {
     return
   }
 
-  if (typeof betAmount !== 'number' || betAmount <= 0) {
-    response.status(400).json(badRequest('Bet amount must be a number greater than 0.'))
+  if (typeof betAmount !== 'number' || !Number.isSafeInteger(betAmount) || betAmount <= 0) {
+    response.status(400).json(badRequest('Bet amount must be a positive whole number of sats.'))
     return
   }
 
-  if (typeof moleCount !== 'number' || moleCount < 1 || moleCount > 6) {
+  if (typeof moleCount !== 'number' || !Number.isInteger(moleCount) || moleCount < 1 || moleCount > 6) {
     response.status(400).json(badRequest('Mole count must be between 1 and 6.'))
     return
   }
 
   const wallet = getOrCreateWallet(accountId, getOptionalLightningAddress(lightningAddress))
-  if (wallet.balance < betAmount) {
-    response.status(400).json(badRequest('Insufficient balance for this round.'))
-    return
-  }
-
-  const firstBet = !listTransactions(accountId).some((transaction) => transaction.kind === 'bet_placed')
-  updateWalletBalance(accountId, wallet.balance - betAmount)
 
   const round: GameRound = {
     id: createRoundId(),
@@ -611,7 +606,6 @@ app.post('/api/game/rounds', (request, response) => {
     accountId,
     betAmount,
     moleCount,
-    firstBet,
     stage: 'awaiting-pick',
     currentRound: 1,
     hitCount: 0,
@@ -623,30 +617,19 @@ app.post('/api/game/rounds', (request, response) => {
     updatedAt: new Date().toISOString(),
   }
 
-  saveRound(round)
-  appendTransaction({
-    playerId: accountId,
-    accountId,
-    roundId: round.id,
-    externalId: null,
-    kind: 'bet_placed',
-    direction: 'debit',
-    status: 'completed',
-    amount: betAmount,
-    currency: 'SATS',
-    provider: 'internal',
-    note: 'Bet locked from game balance',
-    metadata: {
-      moleCount,
-    },
-    balanceBefore: wallet.balance,
-    balanceAfter: Math.max(0, wallet.balance - betAmount),
-    lightningAddress: wallet.lightningAddress ?? null,
-  })
+  const placement = placeBet(round)
+  if (!placement.ok) {
+    const status = placement.reason === 'active-round' ? 409 : 400
+    const message = placement.reason === 'active-round'
+      ? 'Finish or recover your active round before placing another bet.'
+      : 'Insufficient balance for this round.'
+    response.status(status).json(badRequest(message))
+    return
+  }
 
   response.status(201).json({
-    walletBalance: getOrCreateWallet(accountId).balance,
-    round: getPublicRoundState(round),
+    walletBalance: placement.wallet.balance,
+    round: getPublicRoundState(placement.round),
   })
 })
 
@@ -929,8 +912,8 @@ async function handleWithdraw(request: express.Request, response: express.Respon
   }
 
   const withdrawAmount = getOptionalNumber(amount) ?? wallet.balance
-  if (!withdrawAmount || withdrawAmount <= 0) {
-    response.status(400).json(badRequest('Withdrawal amount must be greater than 0.'))
+  if (!withdrawAmount || !Number.isSafeInteger(withdrawAmount) || withdrawAmount <= 0) {
+    response.status(400).json(badRequest('Withdrawal amount must be a positive whole number of sats.'))
     return
   }
 
@@ -949,7 +932,7 @@ async function handleWithdraw(request: express.Request, response: express.Respon
     reason: 'manual_withdraw',
   })
 
-  appendTransaction({
+  const pendingWithdrawalTransaction = appendTransaction({
     playerId: accountId,
     accountId,
     roundId: null,
@@ -1008,9 +991,7 @@ async function handleWithdraw(request: express.Request, response: express.Respon
       payout,
     })
   } catch (error) {
-    updateWalletBalance(accountId, balanceBefore)
-    setWalletHold(accountId, 0)
-    setPendingWithdrawal(accountId, null)
+    rollbackFailedWithdrawal(accountId, withdrawAmount, pendingWithdrawalTransaction.id)
 
     response.status(502).json(badRequest(error instanceof Error ? error.message : 'Unable to create Speed payout.'))
   }

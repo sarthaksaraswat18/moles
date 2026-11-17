@@ -158,6 +158,34 @@
   margin-bottom: 6px;
 }
 
+.autoControls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.autoControls .fieldLabel {
+  margin-bottom: 0;
+}
+
+.autoSelect {
+  width: 100%;
+  min-height: 34px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+
+.autoStopButton {
+  width: 100%;
+  margin-top: 8px;
+}
+
 .walletBalance {
   margin-top: 6px;
   font-weight: 950;

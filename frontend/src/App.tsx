@@ -677,9 +677,16 @@ function MoleArtwork() {
 function App() {
   const bootstrapContext = useMemo(() => parseBootstrapContext(), [])
   const autoAdvanceTimeoutRef = useRef<number | null>(null)
+  const autoNextRoundTimeoutRef = useRef<number | null>(null)
+  const autoTurnRef = useRef<() => void>(() => {})
+  const autoPlayActiveRef = useRef(false)
   const hammerTimeoutRef = useRef<number | null>(null)
   const paymentWindowRef = useRef<Window | null>(null)
   const [controlMode, setControlMode] = useState<ControlMode>('manual')
+  const [autoStopAfterHits, setAutoStopAfterHits] = useState(1)
+  const [autoRoundsPerRun, setAutoRoundsPerRun] = useState(10)
+  const [autoRoundsRemaining, setAutoRoundsRemaining] = useState(0)
+  const [autoPlayActive, setAutoPlayActive] = useState(false)
   const [betAmount, setBetAmount] = useState(DEFAULT_BET)
   const [moleCount, setMoleCount] = useState(DEFAULT_MOLES)
   const [withdrawAmount, setWithdrawAmount] = useState('')
@@ -743,6 +750,11 @@ function App() {
   const connectedLightningAddress =
     getOptionalString(lightningAddress) ?? wallet?.lightningAddress ?? bootstrapContext.lightningAddress
   const displayLightningAddress = formatDisplayLightningAddress(connectedLightningAddress ?? '')
+
+  function setAutoPlayRunning(isActive: boolean) {
+    autoPlayActiveRef.current = isActive
+    setAutoPlayActive(isActive)
+  }
 
   const paymentUrl = useMemo(() => {
     return paymentInfo?.speedInterfaceUrl || paymentInfo?.hostedInvoiceUrl || null
@@ -925,6 +937,9 @@ function App() {
     () => () => {
       clearAutoAdvanceTimeout()
       clearHammerTimeout()
+      if (autoNextRoundTimeoutRef.current !== null) {
+        window.clearTimeout(autoNextRoundTimeoutRef.current)
+      }
     },
     [],
   )
@@ -1068,18 +1083,21 @@ function App() {
     }
   }, [bootstrapContext])
 
-  async function startGame() {
+  async function startGame(autoPlay = false) {
     if (betAmount <= 0) {
+      setAutoPlayRunning(false)
       setFlashMessage('Enter a bet amount greater than 0.')
       return
     }
 
     if (moleCount < 1 || moleCount >= holeCount) {
+      setAutoPlayRunning(false)
       setFlashMessage(`Choose between 1 and ${holeCount - 1} moles.`)
       return
     }
 
     if ((wallet?.balance ?? 0) < betAmount) {
+      setAutoPlayRunning(false)
       setFlashMessage('Not enough balance. Deposit sats before placing a bet.')
       return
     }
@@ -1102,8 +1120,12 @@ function App() {
 
       applyWalletBalance(response.walletBalance)
       setActiveGame(mapBackendRoundToActiveGame(response.round))
-      setFlashMessage('Bet placed on the backend. Pick a hole to reveal whether the mole is there.')
+      setAutoPlayRunning(autoPlay && autoPlayActiveRef.current)
+      setFlashMessage(autoPlay
+        ? 'Auto-play started. It will cash out at your selected hit count.'
+        : 'Bet placed on the backend. Pick a hole to reveal whether the mole is there.')
     } catch (error) {
+      setAutoPlayRunning(false)
       setFlashMessage(error instanceof Error ? error.message : 'Unable to start a round.')
     } finally {
       setIsStartingRound(false)
@@ -1139,12 +1161,14 @@ function App() {
       if (!response.hit) {
         setActiveGame(mapResolvedRoundToVisualGame(response.round, 'lost'))
         setFlashMessage('Missed. The mole popped out of a different hole and the backend locked the round as a loss.')
+        queueNextAutoRound()
         return
       }
 
       if (response.round.stage === 'won-all') {
         setActiveGame(mapResolvedRoundToVisualGame(response.round, 'won-all'))
         setFlashMessage(`Perfect run. You cleared all ${maxRounds} rounds and the backend credited ${formatSats(response.round.payout)} sats.`)
+        queueNextAutoRound()
         return
       }
 
@@ -1189,7 +1213,9 @@ function App() {
         stage: 'cashed-out',
       })
       setFlashMessage(`Cashed out ${formatSats(response.round.payout)} sats at ${formatMultiplier(response.round.multiplier)}.`)
+      queueNextAutoRound()
     } catch (error) {
+      setAutoPlayRunning(false)
       setFlashMessage(error instanceof Error ? error.message : 'Unable to cash out this round.')
     } finally {
       setIsCashingOut(false)
@@ -1199,6 +1225,12 @@ function App() {
   function resetGame() {
     clearAutoAdvanceTimeout()
     clearHammerTimeout()
+    if (autoNextRoundTimeoutRef.current !== null) {
+      window.clearTimeout(autoNextRoundTimeoutRef.current)
+      autoNextRoundTimeoutRef.current = null
+    }
+    setAutoPlayActive(false)
+    setAutoRoundsRemaining(0)
     setStruckHole(null)
     setActiveGame(null)
     void refreshWalletSummary({ silent: true })
@@ -1328,6 +1360,45 @@ function App() {
     pickHole(getRandomHoleIndex(holeCount))
   }
 
+  function queueNextAutoRound() {
+    if (!autoPlayActiveRef.current) {
+      return
+    }
+
+    if (autoRoundsRemaining <= 0) {
+      setAutoPlayRunning(false)
+      return
+    }
+
+    setAutoRoundsRemaining((remaining) => remaining - 1)
+    autoNextRoundTimeoutRef.current = window.setTimeout(() => {
+      autoNextRoundTimeoutRef.current = null
+      void startGame(true)
+    }, 700)
+  }
+
+  autoTurnRef.current = () => {
+    if (!activeGame || activeGame.stage !== 'awaiting-pick' || isBusy) {
+      return
+    }
+
+    if (activeGame.hitCount >= autoStopAfterHits) {
+      void cashOut()
+      return
+    }
+
+    void pickHole(getRandomHoleIndex(holeCount))
+  }
+
+  useEffect(() => {
+    if (!autoPlayActive || activeGame?.stage !== 'awaiting-pick' || isBusy) {
+      return
+    }
+
+    const timerId = window.setTimeout(() => autoTurnRef.current(), 350)
+    return () => window.clearTimeout(timerId)
+  }, [autoPlayActive, activeGame?.id, activeGame?.stage, activeGame?.hitCount, isBusy])
+
   function renderHole(holeIndex: number) {
     const state = getHoleState(activeGame, holeIndex)
     const showMole = state === 'hit' || state === 'mole-reveal'
@@ -1381,7 +1452,9 @@ function App() {
   const primaryActionLabel = showSetupActions
     ? isStartingRound
       ? 'Placing Bet…'
-      : 'Place Bet'
+      : controlMode === 'auto'
+        ? 'Start Auto'
+        : 'Place Bet'
     : showCashoutAction
       ? isCashingOut
         ? 'Cashing Out…'
@@ -1396,7 +1469,13 @@ function App() {
 
   const handlePrimaryAction = () => {
     if (showSetupActions) {
-      void startGame()
+      if (controlMode === 'auto') {
+        setAutoRoundsRemaining(autoRoundsPerRun - 1)
+        setAutoPlayRunning(true)
+      } else {
+        setAutoPlayRunning(false)
+      }
+      void startGame(controlMode === 'auto')
       return
     }
 
@@ -1452,7 +1531,15 @@ function App() {
                 role="tab"
                 aria-selected={controlMode === 'manual'}
                 className={`modeTab ${controlMode === 'manual' ? 'modeTabActive' : ''}`}
-                onClick={() => setControlMode('manual')}
+                onClick={() => {
+                  setControlMode('manual')
+                  setAutoPlayRunning(false)
+                  setAutoRoundsRemaining(0)
+                  if (autoNextRoundTimeoutRef.current !== null) {
+                    window.clearTimeout(autoNextRoundTimeoutRef.current)
+                    autoNextRoundTimeoutRef.current = null
+                  }
+                }}
               >
                 Manual
               </button>
@@ -1461,12 +1548,47 @@ function App() {
                 role="tab"
                 aria-selected={controlMode === 'auto'}
                 className={`modeTab ${controlMode === 'auto' ? 'modeTabActive' : ''}`}
-                onClick={() => setControlMode('auto')}
+                onClick={() => {
+                  setControlMode('auto')
+                  if (activeGame?.stage === 'awaiting-pick' || activeGame?.stage === 'revealing-hit') {
+                    setAutoPlayRunning(true)
+                    setAutoRoundsRemaining(0)
+                  }
+                }}
               >
                 Auto
               </button>
             </div>
           </div>
+
+          {controlMode === 'auto' ? (
+            <div className="field autoControls">
+              <label className="fieldLabel" htmlFor="auto-stop-after">Cash out after hits</label>
+              <select
+                id="auto-stop-after"
+                className="autoSelect"
+                value={autoStopAfterHits}
+                onChange={(event) => setAutoStopAfterHits(Number(event.target.value))}
+                disabled={autoPlayActive || isBusy}
+              >
+                {Array.from({ length: maxRounds }, (_, index) => index + 1).map((count) => (
+                  <option key={count} value={count}>{count} {count === 1 ? 'hit' : 'hits'}</option>
+                ))}
+              </select>
+              <label className="fieldLabel" htmlFor="auto-round-count">Games per run</label>
+              <select
+                id="auto-round-count"
+                className="autoSelect"
+                value={autoRoundsPerRun}
+                onChange={(event) => setAutoRoundsPerRun(Number(event.target.value))}
+                disabled={autoPlayActive || isBusy}
+              >
+                {[1, 5, 10, 25, 50, 100].map((count) => (
+                  <option key={count} value={count}>{count} {count === 1 ? 'game' : 'games'}</option>
+                ))}
+              </select>
+            </div>
+          ) : null}
 
           <div className="field">
             <div className="fieldLabel">Wallet Balance</div>
@@ -1547,6 +1669,23 @@ function App() {
           >
             {primaryActionLabel}
           </button>
+
+          {controlMode === 'auto' && autoPlayActive ? (
+            <button
+              type="button"
+              className="button secondary autoStopButton"
+              onClick={() => {
+                setAutoPlayRunning(false)
+                setAutoRoundsRemaining(0)
+                if (autoNextRoundTimeoutRef.current !== null) {
+                  window.clearTimeout(autoNextRoundTimeoutRef.current)
+                  autoNextRoundTimeoutRef.current = null
+                }
+              }}
+            >
+              Stop Auto
+            </button>
+          ) : null}
 
           {flashMessage ? <div className="panelNote">{flashMessage}</div> : <div className="panelNote muted">Ready.</div>}
         </aside>

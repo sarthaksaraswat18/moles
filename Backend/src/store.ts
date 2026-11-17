@@ -23,6 +23,10 @@ type LegacyLedger = {
   processedInvoices?: Record<string, { purpose: string; walletId: string | null; amountSats: number; processedAt: string }>
 }
 
+export type PlaceBetResult =
+  | { ok: true; round: GameRound; wallet: PlayerWallet }
+  | { ok: false; reason: 'active-round' | 'insufficient-balance'; wallet: PlayerWallet }
+
 const databasePath = process.env.LEDGER_DB_PATH?.trim()
   ? resolve(process.env.LEDGER_DB_PATH)
   : resolve(process.cwd(), 'data', 'ledger.db')
@@ -197,6 +201,10 @@ export function getOrCreateWallet(accountId: string, lightningAddress?: string |
   return ensureWallet(accountId, lightningAddress)
 }
 
+export function closeStore(): void {
+  database.close()
+}
+
 export function syncWalletContext(context: SpeedContext): PlayerWallet {
   const wallet = ensureWallet(context.accountId, context.lightningAddress)
   database.prepare(`UPDATE wallets SET lightning_address = ?, last_known_speed_balance_sats = ?, updated_at = ? WHERE account_id = ?`)
@@ -264,6 +272,86 @@ export function updateWalletBalance(accountId: string, nextBalance: number): Pla
   database.prepare('UPDATE wallets SET balance = ?, updated_at = ? WHERE account_id = ?')
     .run(Math.max(0, Math.floor(Number(nextBalance) || 0)), new Date().toISOString(), accountId)
   return ensureWallet(accountId)
+}
+
+export function placeBet(round: GameRound): PlaceBetResult {
+  database.exec('BEGIN IMMEDIATE')
+  try {
+    const wallet = ensureWallet(round.accountId)
+    const activeRound = database.prepare(`SELECT 1 FROM rounds WHERE account_id = ? AND stage = 'awaiting-pick' LIMIT 1`)
+      .get(round.accountId)
+
+    if (activeRound) {
+      database.exec('COMMIT')
+      return { ok: false, reason: 'active-round', wallet }
+    }
+
+    if (wallet.balance < round.betAmount) {
+      database.exec('COMMIT')
+      return { ok: false, reason: 'insufficient-balance', wallet }
+    }
+
+    const existingBet = database.prepare(`SELECT 1 FROM transactions WHERE account_id = ? AND kind = 'bet_placed' LIMIT 1`)
+      .get(round.accountId)
+    round.firstBet = !existingBet
+    const balanceAfter = wallet.balance - round.betAmount
+    database.prepare('UPDATE wallets SET balance = ?, updated_at = ? WHERE account_id = ?')
+      .run(balanceAfter, new Date().toISOString(), round.accountId)
+    saveRound(round)
+    appendTransaction({
+      playerId: round.playerId,
+      accountId: round.accountId,
+      roundId: round.id,
+      externalId: null,
+      kind: 'bet_placed',
+      direction: 'debit',
+      status: 'completed',
+      amount: round.betAmount,
+      currency: 'SATS',
+      provider: 'internal',
+      note: 'Bet locked from game balance',
+      metadata: { moleCount: round.moleCount },
+      balanceBefore: wallet.balance,
+      balanceAfter,
+      lightningAddress: wallet.lightningAddress ?? null,
+    })
+    database.exec('COMMIT')
+    return { ok: true, round, wallet: ensureWallet(round.accountId) }
+  } catch (error) {
+    database.exec('ROLLBACK')
+    throw error
+  }
+}
+
+export function rollbackFailedWithdrawal(accountId: string, amountSats: number, transactionId: string): PlayerWallet {
+  database.exec('BEGIN IMMEDIATE')
+  try {
+    const wallet = ensureWallet(accountId)
+    const nextBalance = wallet.balance + amountSats
+    database.prepare(`
+      UPDATE wallets
+      SET balance = ?, hold_sats = 0, pending_withdrawal_json = NULL, updated_at = ?
+      WHERE account_id = ?
+    `).run(nextBalance, new Date().toISOString(), accountId)
+
+    const row = database.prepare('SELECT data_json FROM transactions WHERE id = ? AND account_id = ?')
+      .get(transactionId, accountId) as { data_json?: string } | undefined
+    if (!row?.data_json) {
+      throw new Error('Pending withdrawal transaction was not found.')
+    }
+
+    const transaction = parseJson<TransactionEntry>(row.data_json)
+    transaction.status = 'failed'
+    transaction.note = 'Speed Wallet withdrawal failed; reserved sats returned to balance'
+    database.prepare('UPDATE transactions SET status = ?, data_json = ? WHERE id = ?')
+      .run('failed', JSON.stringify(transaction), transactionId)
+
+    database.exec('COMMIT')
+    return ensureWallet(accountId)
+  } catch (error) {
+    database.exec('ROLLBACK')
+    throw error
+  }
 }
 
 export function saveRound(round: GameRound): GameRound {
