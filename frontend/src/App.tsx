@@ -822,7 +822,6 @@ function App() {
 
       await refreshWalletSummary({ silent: true })
       setFlashMessage('Payment verified. Your wallet balance has been updated.')
-      setShowPaymentModal(false)
       setPayButtonLoading(false)
     } catch (error) {
       setFlashMessage(error instanceof Error ? error.message : 'Unable to verify payment.')
@@ -1762,9 +1761,11 @@ function App() {
 
       {showPaymentModal && paymentInfo ? (
         <div className="modalOverlay" role="dialog" aria-modal="true">
-          <div className="modal">
+          <div className={`modal paymentModal ${paymentVerified ? 'paymentModalComplete' : ''}`}>
             <div className="modalHeader">
-              <div className="modalTitle">Add {formatSats(paymentInfo.amountSats)} SATS to wallet</div>
+              <div className="modalTitle">
+                {paymentVerified ? 'Payment confirmed' : `Add ${formatSats(paymentInfo.amountSats)} SATS to wallet`}
+              </div>
               <button
                 type="button"
                 className="button secondary"
@@ -1773,15 +1774,17 @@ function App() {
                   setPayButtonLoading(false)
                 }}
               >
-                Close
+                {paymentVerified ? 'Done' : 'Close'}
               </button>
             </div>
 
             <div className="muted">
-              Complete payment in Speed. After confirmation, your wallet balance will be updated.
+              {paymentVerified
+                ? 'Your deposit has been added to your wallet balance.'
+                : 'Complete payment in Speed. Your wallet updates as soon as the payment is confirmed.'}
             </div>
 
-            {paymentUrl ? (
+            {paymentUrl && !paymentVerified ? (
               <div className="actions">
                 <button type="button" className="button" onClick={onPay} disabled={payButtonLoading}>
                   {payButtonLoading ? 'Opening…' : 'Pay'}
@@ -1795,7 +1798,7 @@ function App() {
               </div>
             ) : null}
 
-            {paymentUrl || paymentInfo.lightningInvoice ? (
+            {!paymentVerified && (paymentUrl || paymentInfo.lightningInvoice) ? (
               <div className="qrGrid">
                 {paymentUrl ? (
                   <div className="qrCard">
@@ -1844,10 +1847,14 @@ function App() {
               </div>
             ) : null}
 
-            <div className="paymentStatus">
-              {paymentVerified
-                ? 'Payment verified. Waiting for wallet update…'
-                : 'Waiting for payment confirmation…'}
+            <div className={`paymentStatus ${paymentVerified ? 'paymentStatusComplete' : verifyLoading ? 'paymentStatusChecking' : ''}`} role="status" aria-live="polite">
+              <span className={`paymentStatusIcon ${paymentVerified ? 'paymentStatusIconComplete' : verifyLoading ? 'paymentStatusIconSpin' : 'paymentStatusIconPulse'}`} aria-hidden="true">
+                {paymentVerified ? '✓' : null}
+              </span>
+              <span>
+                <strong>{paymentVerified ? 'Deposit complete' : verifyLoading ? 'Checking payment' : 'Waiting for payment'}</strong>
+                <small>{paymentVerified ? 'Your balance is ready to use.' : verifyLoading ? 'Confirming with the payment provider…' : 'This screen updates automatically after payment.'}</small>
+              </span>
             </div>
 
             <div className="small">Invoice ID: {paymentInfo.invoiceId}</div>
@@ -1860,6 +1867,21 @@ function App() {
                 Copy invoice ID
               </button>
             </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isDepositing ? (
+        <div className="modalOverlay depositLoadingOverlay" role="status" aria-live="polite" aria-modal="true">
+          <div className="modal depositLoadingModal">
+            <div className="depositLoader" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </div>
+            <div className="depositLoadingTitle">Preparing your deposit</div>
+            <div className="muted">Creating your payment request. This usually takes a moment.</div>
+            <div className="depositProgressTrack" aria-hidden="true"><span /></div>
           </div>
         </div>
       ) : null}
