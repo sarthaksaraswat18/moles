@@ -17,6 +17,8 @@ const CONFIG_PATH = path_1.default.resolve(__dirname, '..', 'config', 'game-conf
 const DEFAULT_GAME_CONFIG = {
     holeCount: 7,
     maxRounds: 6,
+    logicMode: 'current',
+    rtpTarget: 0.8,
     multiplierTable: {
         1: [10.22, 48.02, 336.14, 2352.98, 16470.86, 115296.02],
         2: [3.43, 12, 42.01, 147.06, 514.71, 1801.5],
@@ -50,6 +52,8 @@ function cloneConfig(config) {
     return {
         holeCount: config.holeCount,
         maxRounds: config.maxRounds,
+        logicMode: config.logicMode,
+        rtpTarget: config.rtpTarget,
         multiplierTable: cloneTable(config.multiplierTable),
         roundChanceTable: cloneTable(config.roundChanceTable),
         betSizeChanceTables: cloneBetSizeChanceTables(config.betSizeChanceTables),
@@ -102,9 +106,19 @@ function parseConfig(raw) {
         throw new Error('Game config must be a JSON object.');
     }
     const rec = raw;
+    const logicMode = rec.logicMode === undefined ? 'current' : rec.logicMode;
+    if (logicMode !== 'current' && logicMode !== 'rtp') {
+        throw new Error('logicMode must be "current" or "rtp".');
+    }
+    const rtpTarget = rec.rtpTarget === undefined ? 0.8 : rec.rtpTarget;
+    if (typeof rtpTarget !== 'number' || !Number.isFinite(rtpTarget) || rtpTarget < 0 || rtpTarget > 1) {
+        throw new Error('rtpTarget must be a number between 0 and 1.');
+    }
     return {
         holeCount: parsePositiveInteger(rec.holeCount, 'holeCount'),
         maxRounds: parsePositiveInteger(rec.maxRounds, 'maxRounds'),
+        logicMode,
+        rtpTarget,
         multiplierTable: parseTable(rec.multiplierTable, 'multiplierTable'),
         roundChanceTable: parseTable(rec.roundChanceTable, 'roundChanceTable'),
         betSizeChanceTables: parseBetSizeChanceTables(rec.betSizeChanceTables, 'betSizeChanceTables'),
@@ -201,7 +215,7 @@ function getRoundHitChance(moleCount, round, betAmount) {
             effectiveChance *= MAX_PLAYER_PROFIT_SATS / potentialProfit;
         }
     }
-    effectiveChance *= HOUSE_RTP_TARGET;
+    effectiveChance *= config.logicMode === 'rtp' ? config.rtpTarget : HOUSE_RTP_TARGET;
     return Math.min(Math.max(effectiveChance, 0), 1);
 }
 function getMultiplier(moleCount, hitCount) {

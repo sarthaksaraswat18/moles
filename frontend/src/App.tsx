@@ -89,6 +89,18 @@ type TransactionEntry = {
   createdAt: string
 }
 
+type GameHistoryEntry = {
+  id: string
+  roundId: string
+  result: 'loss' | 'cashout' | 'max-win'
+  betAmount: number
+  moleCount: number
+  roundReached: number
+  multiplier: number
+  payout: number
+  createdAt: string
+}
+
 type BackendReveal = {
   round: number
   selectedHole: number
@@ -171,14 +183,7 @@ type WalletContextResponse = {
 
 type HistoryResponse = {
   wallet: PlayerWallet | null
-  rounds: Array<{
-    id: string
-    result: string
-    roundId: string
-    multiplier: number
-    payout: number
-    createdAt: string
-  }>
+  rounds: GameHistoryEntry[]
   transactions: TransactionEntry[]
 }
 
@@ -705,6 +710,7 @@ function App() {
   )
   const [wallet, setWallet] = useState<PlayerWallet | null>(() => createFallbackWallet(bootstrapContext))
   const [transactions, setTransactions] = useState<TransactionEntry[]>([])
+  const [roundHistory, setRoundHistory] = useState<GameHistoryEntry[]>([])
   const [activeGame, setActiveGame] = useState<ActiveGame | null>(null)
   const [struckHole, setStruckHole] = useState<number | null>(null)
   const [multiplierTable, setMultiplierTable] = useState(MULTIPLIER_TABLE)
@@ -901,6 +907,7 @@ function App() {
 
       setWallet(contextResponse.wallet)
       setTransactions(historyResponse.transactions)
+      setRoundHistory(historyResponse.rounds)
     } catch (error) {
       if (!silent) {
         setFlashMessage(error instanceof Error ? error.message : 'Unable to refresh wallet state.')
@@ -1120,6 +1127,7 @@ function App() {
 
       applyWalletBalance(response.walletBalance)
       setActiveGame(mapBackendRoundToActiveGame(response.round))
+      void refreshWalletSummary({ silent: true })
       setAutoPlayRunning(autoPlay && autoPlayActiveRef.current)
       setFlashMessage(autoPlay
         ? 'Auto-play started. It will cash out at your selected hit count.'
@@ -1157,6 +1165,7 @@ function App() {
       })
 
       applyWalletBalance(response.walletBalance)
+      void refreshWalletSummary({ silent: true })
 
       if (!response.hit) {
         setActiveGame(mapResolvedRoundToVisualGame(response.round, 'lost'))
@@ -1208,6 +1217,7 @@ function App() {
       })
 
       applyWalletBalance(response.walletBalance)
+      void refreshWalletSummary({ silent: true })
       setActiveGame({
         ...mapBackendRoundToActiveGame(response.round),
         stage: 'cashed-out',
@@ -1605,7 +1615,14 @@ function App() {
               >
                 Add Cash
               </button>
-              <button type="button" className="button secondary" onClick={() => setShowHistoryModal(true)}>
+              <button
+                type="button"
+                className="button secondary"
+                onClick={() => {
+                  setShowHistoryModal(true)
+                  void refreshWalletSummary({ silent: true })
+                }}
+              >
                 History
               </button>
             </div>
@@ -1725,11 +1742,32 @@ function App() {
               </button>
             </div>
 
-            <div className="muted">Deposits, bets, and withdrawals for this wallet.</div>
+            <div className="muted">Completed games and wallet activity for this account.</div>
 
             <div style={{ marginTop: 12, maxHeight: 420, overflow: 'auto' }}>
-              {transactions.length > 0 ? (
-                transactions.map((entry) => (
+              {roundHistory.length > 0 ? (
+                <section className="historySection">
+                  <div className="historySectionTitle">Games</div>
+                  {roundHistory.map((entry) => (
+                    <div key={entry.id} className="historyItem">
+                      <div>
+                        <strong>{entry.result === 'loss' ? 'Round lost' : entry.result === 'cashout' ? 'Cashed out' : 'Max win'}</strong>
+                        <span className="muted">
+                          {formatHistoryTime(entry.createdAt)} · {entry.moleCount} moles · {entry.roundReached} hits
+                        </span>
+                      </div>
+                      <div className={`historyAmount ${entry.payout > entry.betAmount ? 'historyCompleted' : ''}`}>
+                        {formatSats(entry.payout)} sats
+                        {entry.multiplier > 0 ? <span className="muted">{formatMultiplier(entry.multiplier)}</span> : null}
+                      </div>
+                    </div>
+                  ))}
+                </section>
+              ) : null}
+
+              <section className="historySection">
+                <div className="historySectionTitle">Wallet Activity</div>
+                {transactions.length > 0 ? transactions.map((entry) => (
                   <div key={entry.id} className="historyItem">
                     <div>
                       <strong>{formatTransactionLabel(entry.kind)}</strong>
@@ -1740,12 +1778,16 @@ function App() {
                       {formatSats(entry.amount)}
                     </div>
                   </div>
-                ))
-              ) : (
+                )) : (
                 <div className="muted" style={{ marginTop: 12 }}>
-                  No transactions yet.
+                  No wallet activity yet.
                 </div>
-              )}
+                )}
+              </section>
+
+              {roundHistory.length === 0 && transactions.length === 0 ? (
+                <div className="muted" style={{ marginTop: 12 }}>No history yet.</div>
+              ) : null}
             </div>
 
             <div className="actions">

@@ -7,6 +7,8 @@ type BetSizeChanceTables = Record<number, GameTable>
 interface GameConfig {
   holeCount: number
   maxRounds: number
+  logicMode: 'current' | 'rtp'
+  rtpTarget: number
   multiplierTable: GameTable
   roundChanceTable: GameTable
   betSizeChanceTables?: BetSizeChanceTables
@@ -16,6 +18,8 @@ const CONFIG_PATH = path.resolve(__dirname, '..', 'config', 'game-config.json')
 const DEFAULT_GAME_CONFIG: GameConfig = {
   holeCount: 7,
   maxRounds: 6,
+  logicMode: 'current',
+  rtpTarget: 0.8,
   multiplierTable: {
     1: [10.22, 48.02, 336.14, 2352.98, 16470.86, 115296.02],
     2: [3.43, 12, 42.01, 147.06, 514.71, 1801.5],
@@ -58,6 +62,8 @@ function cloneConfig(config: GameConfig): GameConfig {
   return {
     holeCount: config.holeCount,
     maxRounds: config.maxRounds,
+    logicMode: config.logicMode,
+    rtpTarget: config.rtpTarget,
     multiplierTable: cloneTable(config.multiplierTable),
     roundChanceTable: cloneTable(config.roundChanceTable),
     betSizeChanceTables: cloneBetSizeChanceTables(config.betSizeChanceTables),
@@ -128,9 +134,21 @@ function parseConfig(raw: unknown): GameConfig {
 
   const rec = raw as Record<string, unknown>
 
+  const logicMode = rec.logicMode === undefined ? 'current' : rec.logicMode
+  if (logicMode !== 'current' && logicMode !== 'rtp') {
+    throw new Error('logicMode must be "current" or "rtp".')
+  }
+
+  const rtpTarget = rec.rtpTarget === undefined ? 0.8 : rec.rtpTarget
+  if (typeof rtpTarget !== 'number' || !Number.isFinite(rtpTarget) || rtpTarget < 0 || rtpTarget > 1) {
+    throw new Error('rtpTarget must be a number between 0 and 1.')
+  }
+
   return {
     holeCount: parsePositiveInteger(rec.holeCount, 'holeCount'),
     maxRounds: parsePositiveInteger(rec.maxRounds, 'maxRounds'),
+    logicMode,
+    rtpTarget,
     multiplierTable: parseTable(rec.multiplierTable, 'multiplierTable'),
     roundChanceTable: parseTable(rec.roundChanceTable, 'roundChanceTable'),
     betSizeChanceTables: parseBetSizeChanceTables(rec.betSizeChanceTables, 'betSizeChanceTables'),
@@ -248,7 +266,7 @@ export function getRoundHitChance(moleCount: number, round: number, betAmount?: 
     }
   }
 
-  effectiveChance *= HOUSE_RTP_TARGET
+  effectiveChance *= config.logicMode === 'rtp' ? config.rtpTarget : HOUSE_RTP_TARGET
 
   return Math.min(Math.max(effectiveChance, 0), 1)
 }
