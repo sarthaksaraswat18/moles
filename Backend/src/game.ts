@@ -307,6 +307,14 @@ export function getRoundChanceTable(): GameTable {
   return cloneTable(getGameConfig().roundChanceTable)
 }
 
+export function getGameLogicSettings(): { mode: 'current' | 'rtp'; rtpTarget: number } {
+  const config = getGameConfig()
+  return {
+    mode: config.logicMode,
+    rtpTarget: config.rtpTarget,
+  }
+}
+
 export function getBetSizeChanceTables(): Record<number, GameTable> {
   const config = getGameConfig()
   return cloneBetSizeChanceTables(config.betSizeChanceTables) ?? {

@@ -215,10 +215,13 @@ app.get('/api/health', (_request, response) => {
 });
 app.get('/api/game/config', (_request, response) => {
     response.set('Cache-Control', 'no-store');
+    const logic = (0, game_1.getGameLogicSettings)();
     response.json({
         holeCount: (0, game_1.getHoleCount)(),
         maxRounds: (0, game_1.getMaxRounds)(),
         multiplierTable: (0, game_1.getMultiplierTable)(),
+        logicMode: logic.mode,
+        rtpTarget: logic.rtpTarget,
     });
 });
 app.get('/api/wallet/context', (request, response) => {

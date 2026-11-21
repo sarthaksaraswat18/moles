@@ -12,6 +12,7 @@ import {
   getMultiplier,
   getMultiplierTable,
   getRoundHitChance,
+  getGameLogicSettings,
 } from './game'
 import { buildSpeedWalletPrompt, createSpeedDepositPayment, createSpeedInstantSend, formatLightningAddress, isLightningAddress, verifyInvoicePaidWithSpeed } from './speed'
 import {
@@ -287,10 +288,13 @@ app.get('/api/health', (_request, response) => {
 
 app.get('/api/game/config', (_request, response) => {
   response.set('Cache-Control', 'no-store')
+  const logic = getGameLogicSettings()
   response.json({
     holeCount: getHoleCount(),
     maxRounds: getMaxRounds(),
     multiplierTable: getMultiplierTable(),
+    logicMode: logic.mode,
+    rtpTarget: logic.rtpTarget,
   })
 })
 

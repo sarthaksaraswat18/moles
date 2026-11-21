@@ -10,6 +10,7 @@ exports.getMaxRounds = getMaxRounds;
 exports.getHoleCount = getHoleCount;
 exports.getMultiplierTable = getMultiplierTable;
 exports.getRoundChanceTable = getRoundChanceTable;
+exports.getGameLogicSettings = getGameLogicSettings;
 exports.getBetSizeChanceTables = getBetSizeChanceTables;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
@@ -245,6 +246,13 @@ function getMultiplierTable() {
 }
 function getRoundChanceTable() {
     return cloneTable(getGameConfig().roundChanceTable);
+}
+function getGameLogicSettings() {
+    const config = getGameConfig();
+    return {
+        mode: config.logicMode,
+        rtpTarget: config.rtpTarget,
+    };
 }
 function getBetSizeChanceTables() {
     const config = getGameConfig();
