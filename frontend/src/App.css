@@ -287,10 +287,47 @@
   color: #166534;
 }
 
-.moleGrid {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 6px;
+.moleSelectWrap {
+  position: relative;
+}
+
+.moleSelectWrap::after {
+  position: absolute;
+  top: 50%;
+  right: 16px;
+  width: 9px;
+  height: 9px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  content: '';
+  pointer-events: none;
+  transform: translateY(-70%) rotate(45deg);
+}
+
+.moleSelect {
+  display: block;
+  width: 100%;
+  min-height: 46px;
+  padding: 10px 42px 10px 12px;
+  appearance: none;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #ffffff;
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.moleSelect:focus-visible {
+  outline: 3px solid rgba(34, 197, 94, 0.24);
+  outline-offset: 2px;
+}
+
+.moleSelect:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .primary {
@@ -430,7 +467,7 @@
 .holesRow {
   display: flex;
   justify-content: center;
-  gap: clamp(24px, 4vw, 42px);
+  gap: clamp(18px, 4vw, 40px);
 }
 
 .holesRowTop,
@@ -1356,21 +1393,26 @@
   }
 
   .boardFrame {
-    min-height: 310px;
-    padding: 14px 8px;
+    min-height: 350px;
+    padding: 18px 8px;
   }
 
   .holesStage {
-    min-height: 270px;
-    gap: clamp(12px, 3vw, 18px);
+    min-height: 300px;
+    gap: clamp(28px, 8vw, 34px);
   }
 
   .holesRow {
-    gap: clamp(8px, 2.5vw, 14px);
+    gap: clamp(28px, 10vw, 38px);
+  }
+
+  .holesRowTop,
+  .holesRowBottom {
+    gap: clamp(38px, 12vw, 48px);
   }
 
   .hole {
-    --hole-w: clamp(72px, 19vw, 90px);
+    --hole-w: clamp(58px, 17vw, 68px);
   }
 
   .topUpGrid {

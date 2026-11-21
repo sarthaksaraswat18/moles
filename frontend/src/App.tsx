@@ -1626,20 +1626,19 @@ function App() {
           </div>
 
           <div className="field">
-            <div className="fieldLabel">Moles</div>
-            <div className="moleGrid">
-              {MOLE_OPTIONS.map((count) => (
-                <button
-                  key={count}
-                  type="button"
-                  className={`betPill ${count === moleCount ? 'active' : ''}`}
-                  onClick={() => setMoleCount(count)}
-                  disabled={!canAdjustControls}
-                  aria-pressed={count === moleCount}
-                >
-                  {count}
-                </button>
-              ))}
+            <label className="fieldLabel" htmlFor="mole-count">Moles</label>
+            <div className="moleSelectWrap">
+              <select
+                id="mole-count"
+                className="moleSelect"
+                value={moleCount}
+                onChange={(event) => setMoleCount(Number(event.target.value))}
+                disabled={!canAdjustControls}
+              >
+                {MOLE_OPTIONS.map((count) => (
+                  <option key={count} value={count}>{count}</option>
+                ))}
+              </select>
             </div>
           </div>
 
