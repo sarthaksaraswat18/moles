@@ -151,6 +151,7 @@ type PaymentInfo = {
   speedInterfaceUrl: string | null
   expiresAt: number | null
   purpose?: string
+  speedWalletPromptSent?: boolean
 }
 
 type VerifyPaymentResponse = {
@@ -1267,14 +1268,17 @@ function App() {
       const dispatched = sendSpeedWalletPrompt(response.speedPrompt)
       setWallet(response.wallet)
 
-      const nextPaymentInfo = normalizePaymentInfo(response, amount)
+      const nextPaymentInfo = {
+        ...normalizePaymentInfo(response, amount),
+        speedWalletPromptSent: dispatched,
+      }
 
       setPaymentInfo(nextPaymentInfo)
       setShowPaymentModal(true)
       setShowAddCashModal(false)
 
       const paymentUrlToOpen = nextPaymentInfo.speedInterfaceUrl || nextPaymentInfo.hostedInvoiceUrl
-      if (paymentUrlToOpen) {
+      if (paymentUrlToOpen && !dispatched) {
         let navigated = false
         const popup = paymentWindowRef.current
         if (popup && !popup.closed) {
@@ -1780,10 +1784,12 @@ function App() {
             <div className="muted">
               {paymentVerified
                 ? 'Your deposit has been added to your wallet balance.'
+                : paymentInfo.speedWalletPromptSent
+                  ? 'Your payment request was sent to Speed Wallet. Complete it in the Speed payment screen, then return here.'
                 : 'Complete payment in Speed. Your wallet updates as soon as the payment is confirmed.'}
             </div>
 
-            {paymentUrl && !paymentVerified ? (
+            {paymentUrl && !paymentVerified && !paymentInfo.speedWalletPromptSent ? (
               <div className="actions">
                 <button type="button" className="button" onClick={onPay} disabled={payButtonLoading}>
                   {payButtonLoading ? 'Opening…' : 'Pay'}
@@ -1797,7 +1803,7 @@ function App() {
               </div>
             ) : null}
 
-            {!paymentVerified && (paymentUrl || paymentInfo.lightningInvoice) ? (
+            {!paymentVerified && !paymentInfo.speedWalletPromptSent && (paymentUrl || paymentInfo.lightningInvoice) ? (
               <div className="qrGrid">
                 {paymentUrl ? (
                   <div className="qrCard">
