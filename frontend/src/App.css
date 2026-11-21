@@ -567,8 +567,8 @@
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 54%;
-  height: 54%;
+  width: 64%;
+  height: 64%;
   transform: translate(-50%, -50%);
   pointer-events: none;
   z-index: 8;
@@ -1388,10 +1388,6 @@
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
-  .moleGrid {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-  }
-
   .boardFrame {
     min-height: 350px;
     padding: 18px 8px;
@@ -1399,20 +1395,20 @@
 
   .holesStage {
     min-height: 300px;
-    gap: clamp(28px, 8vw, 34px);
+    gap: clamp(24px, 7vw, 32px);
   }
 
   .holesRow {
-    gap: clamp(28px, 10vw, 38px);
+    gap: clamp(14px, 5vw, 20px);
   }
 
   .holesRowTop,
   .holesRowBottom {
-    gap: clamp(38px, 12vw, 48px);
+    gap: clamp(28px, 8vw, 34px);
   }
 
   .hole {
-    --hole-w: clamp(58px, 17vw, 68px);
+    --hole-w: clamp(64px, 20vw, 76px);
   }
 
   .topUpGrid {
